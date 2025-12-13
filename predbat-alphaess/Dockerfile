@@ -1,23 +1,25 @@
 ARG BUILD_FROM
 FROM $BUILD_FROM
 
-# Use shell
 SHELL ["/bin/sh", "-c"]
 
 WORKDIR /opt/predbat
 
-# Copy Predbat app code into image
-COPY apps/predbat /opt/predbat/apps/predbat
+# Install Python and pip
+RUN apk add --no-cache python3 py3-pip git
 
-# Copy add-on runtime files
-COPY predbat-alphaess/rootfs/ /
-
-# Install Python and pip for Alpine or Debian base
-RUN (apk add --no-cache python3 py3-pip) || (apt-get update; apt-get install -y python3 python3-pip)
+# Clone the Predbat repository to get the code
+ARG BUILD_VERSION
+RUN git clone --depth 1 --branch main https://github.com/markgraham924/batpred-alphaess.git /tmp/predbat && \
+    cp -r /tmp/predbat/apps/predbat /opt/predbat/apps/predbat && \
+    cp /tmp/predbat/requirements.txt /tmp/requirements.txt && \
+    rm -rf /tmp/predbat
 
 # Install project requirements
-COPY requirements.txt /tmp/requirements.txt
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Copy add-on runtime files
+COPY rootfs/ /
 
 # Ensure run script is executable
 RUN chmod +x /run.sh
