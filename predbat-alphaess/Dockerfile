@@ -11,6 +11,7 @@ RUN apk add --no-cache python3 py3-pip git
 # Clone the Predbat repository to get the code
 ARG BUILD_VERSION
 RUN git clone --depth 1 --branch main https://github.com/markgraham924/batpred-alphaess.git /tmp/predbat && \
+    mkdir -p /opt/predbat/apps && \
     cp -r /tmp/predbat/apps/predbat /opt/predbat/apps/predbat && \
     cp /tmp/predbat/requirements.txt /tmp/requirements.txt && \
     rm -rf /tmp/predbat
