@@ -14,7 +14,11 @@ RUN git clone --depth 1 --branch main https://github.com/markgraham924/batpred-a
     mkdir -p /opt/predbat/apps && \
     cp -r /tmp/predbat/apps/predbat /opt/predbat/apps/predbat && \
     cp /tmp/predbat/requirements.txt /tmp/requirements.txt && \
-    rm -rf /tmp/predbat
+    rm -rf /tmp/predbat && \
+    sed -i 's/from typing import Any, Optional, Self, Mapping/from typing import Any, Optional, Mapping\nfrom typing_extensions import Self/' /opt/predbat/apps/predbat/ohme.py
+
+# Install typing_extensions for Python 3.10 compatibility (Self type)
+RUN python3 -m pip install --no-cache-dir typing_extensions
 
 # Install project requirements
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
