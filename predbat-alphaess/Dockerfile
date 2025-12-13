@@ -23,7 +23,8 @@ RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
 COPY rootfs/ /
 
 # Ensure run script is executable
-RUN chmod +x /run.sh
+RUN chmod +x /run.sh && \
+    chmod +x /etc/s6-overlay/s6-rc.d/predbat/run
 
 ARG BUILD_ARCH
 ARG BUILD_DATE

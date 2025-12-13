@@ -21,6 +21,7 @@ automations
 autopep
 autoupdate
 Basepath
+bashio
 Batpred
 battemperature
 batteri
@@ -43,6 +44,7 @@ collapsable
 compareform
 configform
 Consolas
+contenv
 coro
 crosscharge
 customisation
