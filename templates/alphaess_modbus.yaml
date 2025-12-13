@@ -1,0 +1,120 @@
+# ------------------------------------------------------------------
+# Alpha ESS Gen3 (Modbus via HA) example configuration
+# Map the entities from your AlphaESS HA integration or Modbus setup.
+# ------------------------------------------------------------------
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+
+  # Prefix for Predbat entities
+  prefix: predbat
+
+  # Timezone
+  timezone: Europe/London
+
+  # Template marker; remove once configured
+  template: True
+
+  # Currency symbols
+  currency_symbols:
+   - '£'
+   - 'p'
+
+  # Threads for planning
+  threads: auto
+
+  # Core daily energy sensors (sum if multiple inverters)
+  load_today:
+    - sensor.house_load_today
+  import_today:
+    - sensor.grid_import_today
+  export_today:
+    - sensor.grid_export_today
+  pv_today:
+    - sensor.pv_generation_today
+
+  # One inverter
+  num_inverters: 1
+  inverter_type: "AE3"
+
+  # Real-time power sensors
+  battery_power:
+    - sensor.alphaess_battery_power
+  pv_power:
+    - sensor.alphaess_pv_power
+  grid_power:
+    - sensor.alphaess_grid_power
+  load_power:
+    - sensor.alphaess_load_power
+
+  # SoC sensors (prefer % if available)
+  soc_percent:
+    - sensor.alphaess_battery_soc
+  # If you only have kWh, comment soc_percent and set soc_kw + soc_max
+  # soc_kw:
+  #   - sensor.alphaess_battery_energy
+  # soc_max:
+  #   - 10.0
+
+  # Charge/discharge limits and enable switches
+  charge_limit:
+    - 'number.alphaess_target_soc'
+  reserve:
+    - 'number.alphaess_min_soc'
+  scheduled_charge_enable:
+    - 'switch.alphaess_charge_schedule_enable'
+  scheduled_discharge_enable:
+    - 'switch.alphaess_discharge_schedule_enable'
+
+  # Charge/discharge time windows (HH:MM:SS or select/time entities)
+  # If your integration exposes hour/minute pairs, Predbat will write those too.
+  charge_start_time:
+    - 'time.alphaess_charge_start'
+  charge_end_time:
+    - 'time.alphaess_charge_end'
+  discharge_start_time:
+    - 'time.alphaess_discharge_start'
+  discharge_end_time:
+    - 'time.alphaess_discharge_end'
+
+  # Optional: if your integration needs a button press to send schedules
+  # charge_discharge_update_button:
+  #   - 'button.alphaess_push_schedule'
+
+  # Charge/discharge power limits (W)
+  charge_rate:
+    - 'number.alphaess_charge_power_limit'
+  discharge_rate:
+    - 'number.alphaess_discharge_power_limit'
+
+  # Inverter max AC limit (W)
+  inverter_limit:
+    - 3680
+
+  # Export limit (W) if your system enforces one (optional)
+  # export_limit:
+  #   - 3680
+
+  # Inverter clock skew compensation (minutes)
+  inverter_clock_skew_start: 0
+  inverter_clock_skew_end: 0
+  inverter_clock_skew_discharge_start: 0
+  inverter_clock_skew_discharge_end: 0
+
+  # Set to match Solcast or your PV forecast sensors
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+
+  # Planning horizon
+  forecast_hours: 48
+
+  # Battery scaling (1.0 = no change)
+  battery_scaling:
+    - 1.0
+
+  # Rate inputs (replace with your provider or fixed rates)
+  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'

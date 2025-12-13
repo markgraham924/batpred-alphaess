@@ -21,6 +21,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml)|
    | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Local-Modbus) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml)|
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
+  | [Alpha ESS Gen3](#alpha-ess-gen3) | [AlphaESS HA](https://projects.hillviewlodge.ie/alphaess/) or HA Modbus | [alphaess_modbus.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/alphaess_modbus.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
@@ -397,6 +398,30 @@ max: 10
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
 
 ## Sofar Inverters
+
+## Alpha ESS Gen3
+
+To run Predbat with Alpha ESS Gen3 inverters, use either the community AlphaESS Home Assistant integration or HA’s Modbus integration to expose the required entities, then map them in the `alphaess_modbus.yaml` template.
+
+1. Install Predbat as per the Installation Summary.
+2. Install and configure the AlphaESS HA integration: <https://projects.hillviewlodge.ie/alphaess/> (or configure HA’s Modbus integration to read/write the needed registers).
+3. Copy the template `templates/alphaess_modbus.yaml` over your `apps.yaml` and replace the placeholder entity IDs with those provided by your integration:
+
+- `sensor.alphaess_battery_soc` or `sensor.alphaess_battery_energy`
+- `time.alphaess_charge_start` / `time.alphaess_charge_end`
+- `time.alphaess_discharge_start` / `time.alphaess_discharge_end`
+- `number.alphaess_target_soc` / `number.alphaess_min_soc`
+- `number.alphaess_charge_power_limit` / `number.alphaess_discharge_power_limit`
+- Optional: `button.alphaess_push_schedule` if your integration requires an explicit schedule push
+
+4. Set `inverter_type: "AE3"` in `apps.yaml` to enable the AlphaESS profile.
+5. Verify live sensors update (battery/grid/load/PV power) and that writing target SOC, enable switches, and time windows reflects in the inverter.
+
+Notes:
+
+- Predbat writes HH:MM:SS times and will also write hour/minute pairs if your integration exposes those in addition.
+- If your integration requires a “push/apply schedule” action, set `charge_discharge_update_button`.
+- For Modbus TCP direct setups, use HA’s Modbus `number/select/time/switch` entities bound to the correct register addresses, then reference those entities in `apps.yaml`.
 
 For this integration, the key elements are:
 
