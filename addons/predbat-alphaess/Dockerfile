@@ -1,29 +1,21 @@
 ARG BUILD_FROM
 FROM $BUILD_FROM
 
-# Use bash shell where available
 SHELL ["/bin/sh", "-c"]
 
-# Create workdir and copy runtime
 WORKDIR /opt/predbat
 
-# Copy Predbat app code into image
 COPY apps/predbat /opt/predbat/apps/predbat
 
-# Copy add-on runtime files
-COPY addons/predbat-alphaess/rootfs/ /
+COPY predbat-alphaess/rootfs/ /
 
-# Install Python and pip for both Alpine and Debian-based bases
 RUN (apk add --no-cache python3 py3-pip) || (apt-get update; apt-get install -y python3 python3-pip)
 
-# Install project requirements from repository root
 COPY requirements.txt /tmp/requirements.txt
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Ensure run script is executable
 RUN chmod +x /run.sh
 
-# Labels populated by Supervisor
 ARG BUILD_ARCH
 ARG BUILD_DATE
 ARG BUILD_DESCRIPTION
