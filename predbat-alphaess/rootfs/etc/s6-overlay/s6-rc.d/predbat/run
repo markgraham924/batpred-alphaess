@@ -14,7 +14,11 @@ if [ ! -f "$APPS_FILE" ]; then
   cp /opt/predbat/apps/predbat/config/apps.yaml "$APPS_FILE"
 fi
 
+# Set Predbat apps file location
 export PREDBAT_APPS_FILE="$APPS_FILE"
+
+# SUPERVISOR_TOKEN is automatically available via with-contenv
+# Predbat will use it by default for ha_key
 
 cd /opt/predbat/apps/predbat || bashio::exit.nok "Cannot change to /opt/predbat/apps/predbat"
 

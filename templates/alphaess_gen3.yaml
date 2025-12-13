@@ -1,0 +1,187 @@
+# ------------------------------------------------------------------
+# AlphaESS Gen3 Configuration for Predbat
+# ------------------------------------------------------------------
+# This template is for AlphaESS inverters using the AlphaESS integration
+# Replace YOUR_SERIAL with your AlphaESS inverter serial number
+# ------------------------------------------------------------------
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+
+  # Sets the prefix for all created entities in HA
+  prefix: predbat
+
+  # Timezone to work in (change to your timezone)
+  timezone: Europe/London
+
+  # Currency symbols
+  currency_symbols:
+   - '£'
+   - 'p'
+
+  # Number of threads to use in plan calculation
+  threads: auto
+
+  # For HA Add-on, ha_url and ha_key are automatically configured
+  # DO NOT uncomment these when running as an add-on
+  #ha_url: "http://homeassistant.local:8123"
+  #ha_key: "YOUR_LONG_LIVED_ACCESS_TOKEN"
+
+  # Inverter type - IMPORTANT: Must be set to AE3 for AlphaESS Gen3
+  inverter_type: 'AE3'
+
+  # Number of inverters
+  num_inverters: 1
+
+  # Balance inverters (only for multi-inverter setups)
+  balance_inverters_seconds: 0
+
+  # AlphaESS doesn't use REST API - control via HA entities only
+  # No givtcp_rest needed
+
+  #
+  # Energy today sensors - based on your AlphaESS entities
+  #
+  load_today:
+    - sensor.alphaess_today_s_house_load
+  import_today:
+    - sensor.alphaess_today_s_energy_consumption_from_grid_meter
+  export_today:
+    - sensor.alphaess_today_s_energy_feed_to_grid_meter
+  pv_today:
+    - sensor.alphaess_today_s_energy_from_pv
+
+  #
+  # Power sensors (instantaneous readings)
+  #
+  battery_power:
+    - sensor.alphaess_power_battery
+  pv_power:
+    - sensor.alphaess_current_pv_production
+  load_power:
+    - sensor.alphaess_current_house_load
+  grid_power:
+    - sensor.alphaess_active_power_pv_meter
+
+  #
+  # Battery state sensors
+  #
+  soc_kw:
+    - sensor.alphaess_soc_battery
+  soc_max:
+    - sensor.alphaess_pv_capacity_storage
+  
+  # Battery capacity in kWh (for percentage conversion)
+  battery_capacity_nominal: 16.0
+  
+  reserve:
+    - input_number.alphaess_helper_discharging_cutoff_soc
+
+  #
+  # Charge/Discharge control entities
+  # These appear to be via your helper entities
+  #
+  charge_rate:
+    - number.alphaess_template_force_charging_power
+  discharge_rate:
+    - number.alphaess_template_force_discharging_power
+
+  #
+  # Time window controls - using your helper inputs
+  #
+  charge_start_time:
+    - input_datetime.alphaess_helper_charging_period_1_start
+  charge_end_time:
+    - input_datetime.alphaess_helper_charging_period_1_stop
+  discharge_start_time:
+    - input_datetime.alphaess_helper_discharging_period_1_start
+  discharge_end_time:
+    - input_datetime.alphaess_helper_discharging_period_1_stop
+
+  #
+  # Target SOC controls
+  #
+  charge_limit:
+  #
+  # Schedule enable switches - These helpers are read-only, comment out
+  # Predbat will control via time windows instead
+  #
+  #scheduled_charge_enable:
+  #  - input_boolean.alphaess_helper_force_charging
+  #scheduled_discharge_enable:
+  #  - input_boolean.alphaess_helper_force_discharging
+
+  #
+  # Inverter mode control - Comment out as it's a read-only helper
+  #
+  #inverter_mode:
+  #  - input_select.alphaess_helper_charging_discharging_settings
+
+  #
+  # Inverter time sensor - Comment out due to format issues
+  #
+  #inverter_time:
+  #  - sensor.alphaess_system_time
+  # Inverter time sensor
+  #
+  inverter_time:
+    - sensor.alphaess_system_time
+
+  #
+  # Battery temperature sensors
+  #
+  battery_temperature:
+    - sensor.alphaess_battery_min_cell_temp
+    - sensor.alphaess_battery_max_cell_temp
+  
+  battery_temperature_history:
+    - sensor.alphaess_battery_max_cell_temp
+
+  # Solcast solar forecast (REQUIRED for accurate predictions)
+  # Install Solcast integration from HACS if not already installed
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+
+  #
+  # ENERGY RATES - Choose ONE of the following options:
+  #
+
+  # Option 1: Octopus Energy Agile (requires Octopus Energy integration)
+  #metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_.*_current_rate)'
+  #metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_.*_export_current_rate)'
+
+  # Option 2: Octopus Energy Intelligent (requires Octopus Energy integration)
+  #metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_.*_current_rate)'
+  #metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_.*_export_current_rate)'
+  #intelligent_octopus: True
+
+  # Option 3: Fixed rate tariff (replace with your actual rates in pence/kWh)
+  #metric_standing_charge: 0.46  # Standing charge in £/day
+  #rates_import:
+  #  - start: "00:00:00"
+  #    end: "23:59:59"
+  #    rate: 24.5  # Import rate in pence/kWh
+  #rates_export:
+  #  - start: "00:00:00"
+  #    end: "23:59:59"
+  #    rate: 15.0  # Export rate in pence/kWh
+
+  # Option 4: Time-of-use tariff (e.g., Economy 7, Octopus Go)
+  #metric_standing_charge: 0.46
+  #rates_import:
+  #  - start: "00:30:00"  # Off-peak start
+  #    end: "04:30:00"    # Off-peak end
+  #    rate: 9.0          # Cheap rate
+  #  - start: "04:30:00"
+  #    end: "00:30:00"
+  #    rate: 24.5         # Standard rate
+  #rates_export:
+  #  - start: "00:00:00"
+  #    end: "23:59:59"
+  #    rate: 15.0
+
+  # Car charging integration (optional)
+  num_cars: 0

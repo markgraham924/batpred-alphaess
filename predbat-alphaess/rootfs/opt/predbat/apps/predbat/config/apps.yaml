@@ -1,0 +1,240 @@
+# ------------------------------------------------------------------
+# Predbat Configuration for AlphaESS Gen3
+# EON Next Drive Smart v4 Tariff
+# ------------------------------------------------------------------
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+
+  # Sets the prefix for all created entities in HA
+  prefix: predbat
+
+  # Timezone
+  timezone: Europe/London
+
+  # Currency symbols (£ and pence)
+  currency_symbols:
+   - '£'
+   - 'p'
+
+  # Number of threads to use in plan calculation
+  threads: auto
+
+  # For HA Add-on, ha_url and ha_key are automatically configured via SUPERVISOR_TOKEN
+  # DO NOT set ha_url or ha_key when running as an add-on
+
+  # Inverter type - MUST be AE3 for AlphaESS Gen3
+  inverter_type: 'AE3'
+
+  # Number of inverters
+  num_inverters: 1
+
+  # Balance inverters (disabled for single inverter)
+  balance_inverters_seconds: 0
+
+  #
+  # Energy today sensors - AlphaESS entities
+  #
+  load_today:
+    - sensor.alphaess_today_s_house_load
+  import_today:
+    - sensor.alphaess_today_s_energy_consumption_from_grid_meter
+  export_today:
+    - sensor.alphaess_today_s_energy_feed_to_grid_meter
+  pv_today:
+    - sensor.alphaess_today_s_energy_from_pv
+
+  #
+  # Power sensors (instantaneous readings)
+  #
+  battery_power:
+    - sensor.alphaess_power_battery
+  pv_power:
+    - sensor.alphaess_current_pv_production
+  load_power:
+    - sensor.alphaess_current_house_load
+  grid_power:
+    - sensor.alphaess_active_power_pv_meter
+
+  #
+  # Battery state sensors
+  # AlphaESS reports SOC in %, but we need to calculate kWh from it
+  # Use a template sensor or just use the fixed capacity
+  #
+  soc_kw:
+    - sensor.alphaess_soc_battery
+  soc_max:
+    - 16.0  # Your 16kWh battery capacity (fixed value)
+  
+  # Tell Predbat that soc_kw is in percentage, not kWh
+  # This is handled by inverter_type: AE3 but we need to be explicit
+  battery_capacity_nominal: 16.0
+  
+  reserve:
+    - input_number.alphaess_helper_discharging_cutoff_soc
+
+  #
+  # Charge/Discharge control entities
+  # Max 3.68kW charge/discharge rate
+  #
+  charge_rate:
+    - number.alphaess_template_force_charging_power
+  discharge_rate:
+    - number.alphaess_template_force_discharging_power
+
+  # Battery rate max charge/discharge (in kW)
+  battery_rate_max_charge: 3.68
+  battery_rate_max_discharge: 3.68
+  battery_rate_max_charge_scaled: True
+  battery_rate_max_discharge_scaled: True
+
+  #
+  # Time window controls - using your helper inputs
+  #
+  charge_start_time:
+    - input_datetime.alphaess_helper_charging_period_1_start
+  charge_end_time:
+    - input_datetime.alphaess_helper_charging_period_1_stop
+  discharge_start_time:
+    - input_datetime.alphaess_helper_discharging_period_1_start
+  discharge_end_time:
+    - input_datetime.alphaess_helper_discharging_period_1_stop
+
+  #
+  # Target SOC controls
+  #
+  charge_limit:
+    - input_number.alphaess_helper_charging_cutoff_soc
+  discharge_target_soc:
+    - input_number.alphaess_helper_discharging_cutoff_soc
+
+  #
+  # Schedule enable switches - REMOVED as helpers are read-only
+  # Predbat will control via time windows and charge/discharge rates instead
+  #
+  #scheduled_charge_enable:
+  #  - input_boolean.alphaess_helper_force_charging
+  #scheduled_discharge_enable:
+  #  - input_boolean.alphaess_helper_force_discharging
+
+  #
+  # Inverter mode control - REMOVED as helpers are read-only
+  # AlphaESS Gen3 doesn't use GivEnergy-style mode control
+  #
+  #inverter_mode:
+  #  - input_select.alphaess_helper_charging_discharging_settings
+
+  #
+  # Inverter time sensor - REMOVED due to format issues
+  # AlphaESS system_time doesn't match expected format
+  #
+  #inverter_time:
+  #  - sensor.alphaess_system_time
+
+  #
+  # Battery temperature sensors
+  #
+  battery_temperature:
+    - sensor.alphaess_battery_max_cell_temp
+  
+  battery_temperature_history:
+    - sensor.alphaess_battery_max_cell_temp
+
+  #
+  # Solcast PV Forecast (you have 2 arrays configured)
+  #
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+
+  #
+  # EON Next Drive Smart v4 Tariff
+  # Off-peak: 00:00-07:00 @ 6.20p/kWh
+  # Peak:     07:00-00:00 @ 29.14p/kWh
+  # Export: Fixed 16.5p/kWh
+  #
+  metric_standing_charge: 0.60  # Adjust to your actual standing charge in £/day
+  
+  rates_import:
+    - start: "00:00:00"
+      end: "07:00:00"
+      rate: 6.20
+    - start: "07:00:00"
+      end: "23:59:59"
+      rate: 29.14
+  
+  rates_export:
+    - start: "00:00:00"
+      end: "23:59:59"
+      rate: 16.5
+
+  #
+  # Car charging (disabled for now, uncomment when you add EV)
+  #
+  num_cars: 0
+  # When you add a car, configure:
+  #car_charging_energy:
+  #  - sensor.mycar_battery_level
+  #car_charging_limit:
+  #  - number.mycar_charge_limit
+  #car_charging_planned:
+  #  - input_number.predbat_car_charging_kwh
+
+  #
+  # Optimization settings
+  #
+  # Battery loss percentage (typical 5% round-trip loss)
+  battery_loss: 0.05
+  
+  # Inverter loss percentage (typical 3%)
+  inverter_loss: 0.03
+  
+  # Battery capacity loss with charge level (helps model voltage sag)
+  battery_scaling: 0.95
+  
+  # Best battery SOC to start each 24h period (for battery health)
+  best_soc_keep: 0.5
+  best_soc_min: 0.25
+  
+  # Minimum percentage to keep battery at (reserve %)
+  set_reserve_enable: True
+  set_reserve_min: 4.0
+  
+  # Enable charge/discharge window setting
+  set_charge_window: True
+  set_discharge_window: True
+  
+  # Set charge/discharge freezing (if supported by inverter)
+  set_charge_freeze: False
+  set_discharge_freeze: False
+  
+  # Read-only mode (set to False to allow Predbat to control inverter)
+  set_read_only: False
+  
+  # iBoost solar diverter (if you have one)
+  #iboost_enable: False
+  #iboost_energy_today: sensor.myiboost_energy_today
+  #iboost_charging: binary_sensor.myiboost_active
+
+  #
+  # Advanced settings
+  #
+  # Calculation mode
+  calculate_plan_every: 5  # Minutes between plan recalculations
+  
+  # Metric options
+  metric_min_improvement: 0.0  # Minimum £ saving to make a change
+  metric_min_improvement_discharge: 0.0  # Minimum £ saving for discharge
+  
+  # Days of history to use for load prediction
+  days_previous: 7
+  days_previous_weight: 7  # All days weighted equally
+  
+  # Load filtering
+  load_filter_threshold: 30  # Fill gaps less than 30 minutes
+  
+  # Carbon intensity tracking (optional)
+  #carbon_enable: True
+  #carbon_metric: sensor.carbon_intensity_uk
