@@ -1,0 +1,22 @@
+#!/command/with-contenv bashio
+# ==============================================================================
+# Start Predbat service
+# ==============================================================================
+bashio::log.info "Starting Predbat AlphaESS..."
+
+CONFIG_DIR="/config/predbat"
+APPS_FILE="$CONFIG_DIR/apps.yaml"
+
+mkdir -p "$CONFIG_DIR"
+
+if [ ! -f "$APPS_FILE" ]; then
+  bashio::log.info "No apps.yaml found; copying default"
+  cp /opt/predbat/apps/predbat/config/apps.yaml "$APPS_FILE"
+fi
+
+export PREDBAT_APPS_FILE="$APPS_FILE"
+
+cd /opt/predbat/apps/predbat || bashio::exit.nok "Cannot change to /opt/predbat/apps/predbat"
+
+bashio::log.info "Launching Predbat from $(pwd)"
+exec python3 hass.py
