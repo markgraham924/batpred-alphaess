@@ -6740,6 +6740,7 @@ def get_plan_renderer_js():
                 import: `The import rate for this slot, in ${currencyMinor} per kWh. Bold if a charge is planned this slot.`,
                 export: `The export rate for this slot, in ${currencyMinor} per kWh. Bold if a discharge/export is planned this slot.`,
                 state: "What the battery is doing this slot - hover a state cell for the specific reason.",
+                alphaess_mode: 'The physical mode the guarded AlphaESS controller is expected to apply this slot.',
                 limit: 'The battery SoC Predbat is planning to reach by the end of this slot.',
                 pv: 'Predicted solar generation for this slot, from the Solcast forecast.',
                 load: 'Predicted house electricity consumption for this slot, from historical data.',
@@ -6767,6 +6768,9 @@ def get_plan_renderer_js():
             html += showDebug ? th('import', `Import ${currencyMinor} (w/loss)`) : th('import', `Import ${currencyMinor}`);
             html += showDebug ? th('export', `Export ${currencyMinor} (w/loss)`) : th('export', `Export ${currencyMinor}`);
             html += th('state', 'State', ' colspan="2"');
+            if (jsonData.alphaess_mode_column) {
+                html += th('alphaess_mode', 'AlphaESS mode');
+            }
             html += th('limit', 'Limit %');
             html += showDebug ? th('pv', 'PV kWh (10%)') : th('pv', 'PV kWh');
             html += showDebug ? th('load', 'Load kWh (10%)') : th('load', 'Load kWh');
@@ -6879,6 +6883,11 @@ def get_plan_renderer_js():
                     }
                 }
 
+                if (jsonData.alphaess_mode_column) {
+                    const alphaessTitle = row.alphaess_mode_title ? ` title="${escapeAttr(row.alphaess_mode_title)}"` : '';
+                    html += `<td id=alphaess_mode ${cellStyle} bgcolor=${row.alphaess_mode_color || '#FFFFFF'}${alphaessTitle}>${row.alphaess_mode || ''}</td>`;
+                }
+
                 // Limit cell (with rowspan handling)
                 if (!row.skip_limit_cell) {
                     const rowspanAttr = row.rowspan_limit > 0 ? ` rowspan="${row.rowspan_limit}"` : '';
@@ -6980,8 +6989,12 @@ def get_plan_renderer_js():
                 const totals = jsonData.totals;
                 html += '<tr style="color:black">';
 
-                // Empty cells for Time, Import, Export, State (colspan 2), Limit %
-                html += '<td></td><td></td><td></td><td></td><td></td><td></td>';
+                // Empty cells for Time, Import, Export, State (colspan 2), optional AlphaESS mode, Limit %
+                html += '<td></td><td></td><td></td><td></td><td></td>';
+                if (jsonData.alphaess_mode_column) {
+                    html += '<td></td>';
+                }
+                html += '<td></td>';
 
                 // PV forecast total
                 html += `<td bgcolor=#FFFFFF><b>${totals.pv_forecast || ''}</b></td>`;

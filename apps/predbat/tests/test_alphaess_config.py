@@ -11,6 +11,7 @@
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 from config import INVERTER_DEF, APPS_SCHEMA
 from components import COMPONENT_LIST
+from output import alphaess_plan_mode
 
 
 def test_alphaess_component_registered():
@@ -144,6 +145,9 @@ def test_alphaess_apps_schema_keys():
         "alphaess_battery_rate_max": "float",
         "alphaess_api_delay": "float",
         "alphaess_min_write_interval": "integer",
+        "plan_alphaess_mode_column": "boolean",
+        "plan_alphaess_high_soc_enter": "float",
+        "plan_alphaess_high_soc_exit": "float",
     }
     for key, kind in expected.items():
         entry = APPS_SCHEMA.get(key)
@@ -157,6 +161,31 @@ def test_alphaess_apps_schema_keys():
     assert not failed, "test_alphaess_apps_schema_keys"
 
 
+def test_alphaess_plan_mode_mapping():
+    """Plan labels follow controller priority and high-SoC hysteresis."""
+    cases = [
+        # charge, car, force export, freeze export, SoC, previous high-SoC, label, resulting high-SoC
+        (True, True, True, True, 100, False, "Force Chg", True),
+        (False, True, True, True, 80, False, "EV Hold", False),
+        (False, False, True, True, 80, False, "Force Exp", False),
+        (False, False, False, True, 80, False, "Mode 19", False),
+        (False, False, False, False, 95, False, "Mode 19", True),
+        (False, False, False, False, 94, True, "Mode 19", True),
+        (False, False, False, False, 92, True, "Normal", False),
+    ]
+    for charge, car, force_export, freeze_export, soc, prior_high_soc, expected_mode, expected_high_soc in cases:
+        mode, _title, _color, high_soc = alphaess_plan_mode(
+            charge,
+            car,
+            force_export,
+            freeze_export,
+            soc,
+            prior_high_soc,
+        )
+        assert mode == expected_mode
+        assert high_soc is expected_high_soc
+
+
 def run_alphaess_config_tests(my_predbat):
     """Run all AlphaESS config/INVERTER_DEF tests."""
     failed = False
@@ -165,6 +194,7 @@ def run_alphaess_config_tests(my_predbat):
         ("control_enable_default", test_alphaess_control_enable_defaults_true),
         ("inverter_def", test_alphaess_inverter_def_complete),
         ("apps_schema", test_alphaess_apps_schema_keys),
+        ("plan_mode_mapping", test_alphaess_plan_mode_mapping),
     ]:
         try:
             if fn():

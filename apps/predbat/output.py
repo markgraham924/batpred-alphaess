@@ -64,6 +64,41 @@ def yesterday_slot_is_exporting(slot_status):
     return "exporting" in slot_status or "cross-charging" in slot_status
 
 
+def alphaess_plan_mode(
+    charge_planned,
+    car_planned,
+    force_export_planned,
+    freeze_export_planned,
+    soc_percent,
+    high_soc_policy_active=False,
+    high_soc_enter=95.0,
+    high_soc_exit=93.0,
+):
+    """Map one Predbat plan slot to the guarded AlphaESS controller mode.
+
+    The priority matches ``predbat_alphaess.models.desired_state``.  The
+    high-SoC flag is returned so callers can carry the controller's hysteresis
+    across consecutive plan rows.
+    """
+    if soc_percent >= high_soc_enter:
+        high_soc_policy_active = True
+    elif soc_percent < high_soc_exit:
+        high_soc_policy_active = False
+
+    if charge_planned:
+        return "Force Chg", "State of Charge Control (Mode 2)", "#3AEE85", high_soc_policy_active
+    if car_planned:
+        return "EV Hold", "Hold battery while the car charges (Mode 2)", "#34DBEB", high_soc_policy_active
+    if force_export_planned:
+        return "Force Exp", "State of Charge Control discharge (Mode 2)", "#FFFF00", high_soc_policy_active
+    if freeze_export_planned or high_soc_policy_active:
+        reason = "Export excess solar (Mode 19)"
+        if high_soc_policy_active and not freeze_export_planned:
+            reason += " - high-SoC anti-curtailment policy"
+        return "Mode 19", reason, "#AAAAAA", high_soc_policy_active
+    return "Normal", "Normal Mode (5)", "#FFFFFF", high_soc_policy_active
+
+
 class Output:
     """Output and sensor publishing mixin.
 
@@ -578,7 +613,7 @@ class Output:
                 symbol = "?"
         return symbol
 
-    def get_html_plan_header(self, plan_debug):
+    def get_html_plan_header(self, plan_debug, alphaess_mode_column=False):
         """
         Returns the header row for the HTML plan.
         """
@@ -592,6 +627,8 @@ class Output:
             html += "<th><b>Import {}</b></th>".format(self.currency_symbols[1])
             html += "<th><b>Export {}</b></th>".format(self.currency_symbols[1])
         html += "<th colspan=2><b>State</b></th>"  # state can potentially be two cells for charging and exporting in the same slot
+        if alphaess_mode_column:
+            html += "<th><b>AlphaESS mode</b></th>"
         html += "<th><b>Limit %</b></th>"
         if plan_debug:
             html += "<th><b>PV kWh (10%)</b></th>"
@@ -1038,6 +1075,10 @@ class Output:
         """
         html = ""
         plan_debug = self.plan_debug
+        alphaess_mode_column = self.get_arg("plan_alphaess_mode_column", False)
+        alphaess_high_soc_enter = float(self.get_arg("plan_alphaess_high_soc_enter", 95.0))
+        alphaess_high_soc_exit = float(self.get_arg("plan_alphaess_high_soc_exit", 93.0))
+        alphaess_high_soc_policy_active = False
         mode = self.predbat_mode
         if self.set_read_only:
             if self.set_read_only_axle:
@@ -1048,7 +1089,7 @@ class Output:
             mode += " (debug)"
         html += "<table>"
         html += "<tr>"
-        html += self.get_html_plan_header(plan_debug)
+        html += self.get_html_plan_header(plan_debug, alphaess_mode_column)
         # Use plan_interval_minutes instead of hardcoded 30
         minute_now_align = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
         end_plan = min(end_record, self.forecast_minutes) + minute_now_align
@@ -1097,6 +1138,7 @@ class Output:
         raw_plan["num_cars"] = self.num_cars
         raw_plan["iboost_enable"] = self.iboost_enable
         raw_plan["carbon_enable"] = self.carbon_enable
+        raw_plan["alphaess_mode_column"] = alphaess_mode_column
         raw_plan["manual_load_value"] = self.get_arg("manual_load_value", 0.5)
 
         rate_start = self.midnight_utc
@@ -1573,6 +1615,25 @@ class Output:
                     carbon_str += " &rarr;"
                     carbon_color = "#FFFFFF"
 
+            alphaess_mode = None
+            alphaess_mode_title = None
+            alphaess_mode_color = None
+            if alphaess_mode_column:
+                charge_planned = charge_window_n >= 0 and self.charge_limit_best[charge_window_n] > 0.0
+                freeze_export_planned = export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_FREEZE
+                force_export_planned = export_window_n >= 0 and self.export_limits_best[export_window_n] < EXPORT_LIMIT_IDLE and not freeze_export_planned
+                car_planned = self.num_cars > 0 and car_charging_kwh > 0.0
+                alphaess_mode, alphaess_mode_title, alphaess_mode_color, alphaess_high_soc_policy_active = alphaess_plan_mode(
+                    charge_planned,
+                    car_planned,
+                    force_export_planned,
+                    freeze_export_planned,
+                    soc_percent,
+                    alphaess_high_soc_policy_active,
+                    alphaess_high_soc_enter,
+                    alphaess_high_soc_exit,
+                )
+
             # Work out clipped
             clipped_amount = self.predict_clipped_best.get(minute_relative_start, 0)
             clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
@@ -1609,6 +1670,8 @@ class Output:
                     html += "<td colspan=2 "
                 html += cell_style + " "
                 html += "rowspan=" + str(rowspan) + " bgcolor=" + state_color + ">" + state + "</td>"
+                if alphaess_mode_column:
+                    html += '<td id=alphaess_mode bgcolor={} title="{}">{}</td>'.format(alphaess_mode_color, escape_html(alphaess_mode_title, quote=True), alphaess_mode)
                 html += "<td rowspan=" + str(rowspan) + " bgcolor=#FFFFFF> " + show_limit + "</td>"
             elif not in_span:
                 if split:
@@ -1617,7 +1680,11 @@ class Output:
                     html += "<td colspan=2 "
                 html += cell_style + " "
                 html += "bgcolor=" + state_color + ">" + state + "</td>"
+                if alphaess_mode_column:
+                    html += '<td id=alphaess_mode bgcolor={} title="{}">{}</td>'.format(alphaess_mode_color, escape_html(alphaess_mode_title, quote=True), alphaess_mode)
                 html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
+            elif alphaess_mode_column:
+                html += '<td id=alphaess_mode bgcolor={} title="{}">{}</td>'.format(alphaess_mode_color, escape_html(alphaess_mode_title, quote=True), alphaess_mode)
             html += "<td id=pv bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
             html += "<td id=load data-minute=" + str(minute) + " bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
             if plan_debug:
@@ -1655,6 +1722,10 @@ class Output:
             json_row["state_target"] = raw_state_target
             json_row["state_override"] = raw_state_override
             json_row["state_html"] = state
+            if alphaess_mode_column:
+                json_row["alphaess_mode"] = alphaess_mode
+                json_row["alphaess_mode_title"] = alphaess_mode_title
+                json_row["alphaess_mode_color"] = alphaess_mode_color
 
             json_row["reasons"] = reason_parts if reason_parts else demand_reason
 
@@ -1742,7 +1813,10 @@ class Output:
         else:
             total_str = "-" + self.currency_symbols[0] + "%02.02f" % (abs(metric_end) / 100.0)
         html += '<tr style="color:black">'
-        html += "<td></td><td></td><td></td><td></td><td></td><td></td>"
+        html += "<td></td><td></td><td></td><td></td><td></td>"
+        if alphaess_mode_column:
+            html += "<td></td>"
+        html += "<td></td>"
         html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(pv_total))
         html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(load_total))
         if plan_debug:
