@@ -957,6 +957,7 @@ The number of inverters you have. If you increase this above 1 you must provide 
 
 inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should be set to one of the inverter types that are already pre-programmed into Predbat:
 
+  AlphaESSController: AlphaESS through the guarded Home Assistant service integration
   DeyeCloud: DEYE Cloud API integration (EXPERIMENTAL)
   EnphaseCloud: Enphase Cloud integration (EXPERIMENTAL)
   FoxCloud: Fox Cloud integration

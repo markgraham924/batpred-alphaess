@@ -78,6 +78,16 @@ def _tiebreak_decision_tests(my_predbat, failures):
     # Exactly cost-neutral (gap == 0) but cleaner -> adopt new.
     _check(my_predbat.should_replace_plan(-200.0, -200.0, 4, 2) is True, "cost-neutral cleaner plan adopts new", failures)
 
+    # export_more_solar has its own explicit tolerance. A new plan that covers
+    # more PV with Freeze Export is allowed to be slightly dearer within it,
+    # rather than being silently undone by the generic cached-plan anti-jitter.
+    my_predbat.export_more_solar = True
+    my_predbat.export_more_solar_threshold = 5.0
+    _check(my_predbat.should_replace_plan(-200.0, -195.5, 3, 3, solar_prev=0.0, solar_new=4.0) is True, "more Freeze Export solar within 5p tolerance adopts new", failures)
+    _check(my_predbat.should_replace_plan(-200.0, -194.9, 3, 3, solar_prev=0.0, solar_new=4.0) is False, "solar preference beyond 5p tolerance keeps previous", failures)
+    _check(my_predbat.should_replace_plan(-200.0, -195.5, 3, 3, solar_prev=4.0, solar_new=4.0) is False, "equal Freeze Export solar keeps anti-jitter", failures)
+    my_predbat.export_more_solar = False
+
 
 def _scoring_pair_tests(my_predbat, failures):
     """plan_scoring_pair: selection scores the pre-clip plans, and never mixes a clipped side with a pre-clip one.

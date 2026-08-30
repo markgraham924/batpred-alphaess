@@ -3507,6 +3507,7 @@ charge_start_service:
     failed |= test_call_adjust_export_immediate("export_immediate6", my_predbat, ha, inv, dummy_items, 49, repeat=True)
     failed |= test_call_adjust_export_immediate("export_immediate6", my_predbat, ha, inv, dummy_items, 49, discharge_start_time="00:00:00", discharge_end_time="09:00:00", clear=True)
     failed |= test_call_adjust_export_immediate("export_immediate7", my_predbat, ha, inv, dummy_items, 50, freeze=True)
+    failed |= test_call_adjust_export_immediate("export_immediate_freeze_at_100", my_predbat, ha, inv, dummy_items, 100, freeze=True, clear=True)
     failed |= test_call_adjust_export_immediate("export_immediate8", my_predbat, ha, inv, dummy_items, 50, freeze=False, no_freeze=True)
     failed |= test_call_adjust_export_immediate("export_immediate9", my_predbat, ha, inv, dummy_items, 30.0)
     # batpred#4424/#4432: an explicit freeze request must never degrade into a real charge/export

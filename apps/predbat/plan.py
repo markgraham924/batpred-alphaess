@@ -1172,7 +1172,30 @@ class Plan:
             prev_mode = mode
         return segments
 
-    def should_replace_plan(self, metric_prev, metric_new, fragmentation_prev, fragmentation_new):
+    def freeze_export_solar_coverage(self, export_window, export_limits):
+        """Return forecast solar energy covered by genuine Freeze Export windows.
+
+        This measures the user's explicit ``export_more_solar`` preference in the
+        same units as the stepped PV forecast. It deliberately ignores force
+        export and idle windows, and clips the calculation to the active forecast.
+        """
+        coverage = 0.0
+        forecast_end = self.minutes_now + self.end_record
+        pv_forecast = self.prediction.pv_forecast_minute_step
+        for window, limit in zip(export_window, export_limits):
+            if limit != EXPORT_LIMIT_FREEZE:
+                continue
+            start = max(window["start"], self.minutes_now)
+            end = min(window["end"], forecast_end)
+            for minute in range(start, end, PREDICT_STEP):
+                coverage += pv_forecast.get(minute - self.minutes_now, 0.0)
+        return coverage
+
+    def prefer_solar_export_plan(self, metric_prev, metric_new, solar_prev, solar_new):
+        """Whether export_more_solar's explicit tolerance prefers the new plan."""
+        return self.export_more_solar and solar_new > (solar_prev + 0.001) and (metric_new - metric_prev) <= self.export_more_solar_threshold
+
+    def should_replace_plan(self, metric_prev, metric_new, fragmentation_prev, fragmentation_new, solar_prev=0.0, solar_new=0.0):
         """Decide whether to adopt the freshly optimised plan over the incumbent.
 
         The new plan is adopted when it is better by at least metric_min_improvement_plan (the existing
@@ -1182,6 +1205,8 @@ class Plan:
         """
         improvement = metric_prev - metric_new
         if improvement >= self.metric_min_improvement_plan:
+            return True
+        if self.prefer_solar_export_plan(metric_prev, metric_new, solar_prev, solar_new):
             return True
         if improvement >= 0 and fragmentation_new < fragmentation_prev:
             return True
@@ -1634,7 +1659,9 @@ class Plan:
                 self.log("Previous plan best metric is {} (cost {}) and new plan best metric is {} (cost {})".format(dp2(metric_prev), dp2(cost_prev), dp2(metric), dp2(cost)))
                 fragmentation_prev = self.plan_fragmentation(score_prev[1], score_prev[0], score_prev[2], score_prev[3])
                 fragmentation_new = self.plan_fragmentation(score_new[1], score_new[0], score_new[2], score_new[3])
-                if not self.should_replace_plan(metric_prev, metric, fragmentation_prev, fragmentation_new):
+                solar_prev = self.freeze_export_solar_coverage(score_prev[2], score_prev[3]) if self.export_more_solar else 0.0
+                solar_new = self.freeze_export_solar_coverage(score_new[2], score_new[3]) if self.export_more_solar else 0.0
+                if not self.should_replace_plan(metric_prev, metric, fragmentation_prev, fragmentation_new, solar_prev=solar_prev, solar_new=solar_new):
                     self.log("New plan metric is not significantly better (metric_min_improvement_plan {}) than previous plan, using previous plan".format(self.metric_min_improvement_plan))
                     self.charge_window_best = clone_windows(charge_window_best_prev)
                     self.charge_limit_best = charge_limit_best_prev.copy()
@@ -1645,6 +1672,10 @@ class Plan:
                     preclip_new = preclip_prev
                 elif (metric_prev - metric) >= self.metric_min_improvement_plan:
                     self.log("New plan metric is significantly better from previous plan, using new plan")
+                elif self.prefer_solar_export_plan(metric_prev, metric, solar_prev, solar_new):
+                    self.log(
+                        "New plan covers more forecast solar with Freeze Export ({}kWh vs {}kWh) within export_more_solar_threshold {}{}, using new plan".format(dp2(solar_new), dp2(solar_prev), self.export_more_solar_threshold, self.currency_symbols[1])
+                    )
                 else:
                     self.log("New plan is a cost-neutral improvement but less fragmented ({} vs {} segments), using new plan".format(fragmentation_new, fragmentation_prev))
 
@@ -3421,6 +3452,11 @@ class Plan:
                     target_day = self.export_window_best[window_n_target]["start"] // 1440
 
                     if window_start_target in self.manual_all_times:
+                        continue
+                    # A Freeze Export destination is a deliberate solar-routing
+                    # window. Moving a battery force export into it destroys Mode
+                    # 19 coverage and can make the inverter charge surplus solar.
+                    if export_limit_target == EXPORT_LIMIT_FREEZE:
                         continue
                     if swapped_target.get(window_n_target, False):
                         # Skip if we already swapped this window

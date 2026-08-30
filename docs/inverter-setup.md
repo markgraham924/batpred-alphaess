@@ -3420,6 +3420,21 @@ This means Predbat can only actually cause charging or discharging if a charge/d
 
 ## I want to add an unsupported inverter to Predbat
 
+### AlphaESS through the guarded Home Assistant controller
+
+This fork includes `templates/alphaess_ha_controller.yaml` and the built-in
+`AlphaESSController` inverter type. Predbat owns planning and calls semantic Home
+Assistant services; the `predbat_alphaess` integration remains the sole Modbus
+writer and applies rate limits, slot-level command admission and safety checks.
+
+Freeze Export maps to AlphaESS Mode 19. In that mode surplus PV is exported and
+cannot charge the battery, while the battery may still cover house demand when PV
+is insufficient. Force charge and force export remain separate service calls.
+
+Copy the template into `apps.yaml`, then adjust entity IDs, battery capacity and
+power limits to the installed system. Do not configure Predbat to write the same
+Modbus registers directly.
+
 - First copy one of the template configurations that is close to your system and try to configure it to match the sensors you have
 - Create a GitHub ticket for support and add what you know to the ticket
 - Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter

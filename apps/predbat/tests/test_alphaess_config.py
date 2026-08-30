@@ -113,6 +113,24 @@ def test_alphaess_inverter_def_complete():
     assert not failed, "test_alphaess_inverter_def_complete"
 
 
+def test_alphaess_controller_inverter_def():
+    """The guarded Home Assistant service profile encodes Mode 19 semantics."""
+    entry = INVERTER_DEF.get("AlphaESSController")
+    assert entry, "AlphaESSController not in INVERTER_DEF"
+    expected = {
+        "output_charge_control": "none",
+        "charge_control_immediate": True,
+        "has_charge_enable_time": False,
+        "has_discharge_enable_time": False,
+        "has_target_soc": False,
+        "support_charge_freeze": False,
+        "support_discharge_freeze": True,
+        "target_soc_used_for_discharge": True,
+    }
+    for key, value in expected.items():
+        assert entry.get(key) == value, "AlphaESSController[{}] = {} != {}".format(key, entry.get(key), value)
+
+
 def test_alphaess_apps_schema_keys():
     """Every alphaess_* key a user may set is declared with the right type."""
     failed = False

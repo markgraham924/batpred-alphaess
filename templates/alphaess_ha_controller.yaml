@@ -1,0 +1,69 @@
+# AlphaESS controlled through the guarded Home Assistant integration.
+# Predbat plans semantic actions; the integration is the sole Modbus writer.
+pred_bat:
+  module: predbat
+  class: PredBat
+
+  num_inverters: 1
+  inverter_type: AlphaESSController
+
+  soc_percent:
+    - sensor.alphaess_soc_battery
+  battery_power:
+    - sensor.alphaess_power_battery
+  battery_power_invert:
+    - false
+  pv_power:
+    - sensor.alphaess_current_pv_production
+  load_power:
+    - sensor.alphaess_current_house_load_filtered
+  grid_power:
+    - sensor.alphaess_power_grid
+  grid_power_invert:
+    - true
+
+  load_today:
+    - sensor.alphaess_today_s_house_load
+  import_today:
+    - sensor.alphaess_today_s_energy_consumption_from_grid_meter
+  export_today:
+    - sensor.alphaess_today_s_energy_feed_to_grid_meter
+  pv_today:
+    - sensor.alphaess_today_s_energy_from_pv
+
+  soc_max:
+    - 16
+  reserve:
+    - 4
+  battery_min_soc:
+    - 4
+  inverter_reserve_max: 100
+  inverter_limit:
+    - 3680
+  battery_rate_max:
+    - 3680
+  inverter_limit_charge:
+    - 3680
+  inverter_limit_discharge:
+    - 3680
+  inverter_limit_charge_dc:
+    - 3680
+
+  charge_start_service:
+    - service: predbat_alphaess.charge_start
+      power: "{power}"
+      target_soc: "{target_soc}"
+      end_time: "{charge_end_time}"
+  charge_stop_service:
+    - service: predbat_alphaess.charge_stop
+  discharge_start_service:
+    - service: predbat_alphaess.discharge_start
+      power: "{power}"
+      target_soc: "{target_soc}"
+      end_time: "{discharge_end_time}"
+  discharge_freeze_service:
+    - service: predbat_alphaess.mode19_start
+      target_soc: "{target_soc}"
+      end_time: "{discharge_end_time}"
+  discharge_stop_service:
+    - service: predbat_alphaess.discharge_stop

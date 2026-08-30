@@ -24,6 +24,7 @@ pass exists to push back.
 
 from tests.test_infra import reset_rates, reset_inverter, update_rates_export
 from prediction import Prediction
+from const import EXPORT_LIMIT_FREEZE
 
 
 def setup_swap_export(
@@ -176,6 +177,18 @@ def run_optimise_swap_export_tests(my_predbat):
     my_predbat.optimise_swap_export(0, len(export_window_best))
     if not (my_predbat.export_limits_best[0] == 100.0 and my_predbat.export_limits_best[1] == 0.0):
         print("ERROR: an export already in the last window should be unchanged, got limits {}".format(my_predbat.export_limits_best))
+        failed = True
+
+    # A later Freeze Export window is reserved for solar routing. The swap pass
+    # must not replace Mode 19 with an earlier force-export target.
+    export_window_best = [
+        {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 15.0},
+        {"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 60, "average": 15.0},
+    ]
+    setup_swap_export(my_predbat, export_window_best, export_limits_best=[0.0, EXPORT_LIMIT_FREEZE])
+    my_predbat.optimise_swap_export(0, len(export_window_best))
+    if my_predbat.export_limits_best != [0.0, EXPORT_LIMIT_FREEZE]:
+        print("ERROR: force export must not replace a Freeze Export destination, got {}".format(my_predbat.export_limits_best))
         failed = True
 
     # ---------------------------------------------------------------------------------------------
