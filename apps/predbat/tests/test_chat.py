@@ -14,6 +14,7 @@ loop, the tool dispatch and the confirmation gate are all exercised without a ne
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -39,6 +40,7 @@ from chat import (
     max_attempts_for,
     MODEL_CACHE_MINUTES,
     MODEL_CACHE_VERSION,
+    NO_PROVIDER_MESSAGE,
     ollama_native_url,
     ollama_tags_to_catalogue,
     model_cache_name,
@@ -1709,6 +1711,25 @@ def _write_call_response(entity_id="input_number.predbat_best_soc_keep", value="
     return _tool_call_response("set_config", {"entity_id": entity_id, "value": value}, call_id="call_write")
 
 
+@contextlib.contextmanager
+def _fast_confirm_poll():
+    """Shorten await_confirmation's poll interval for tests whose answer arrives at once.
+
+    await_confirmation re-checks the pending confirmation every CONFIRM_POLL_SECONDS (0.2s). That
+    is the right cadence against a person at a browser, but a test whose background thread answers
+    in microseconds still sits out a whole tick, and these tests assert that the answer is
+    honoured - not how often the waiter looks for it. Shortened rather than removed so the polling
+    loop is still genuinely exercised. Same trick test_write_confirmation_timeout uses on
+    CONFIRM_TIMEOUT_SECONDS.
+    """
+    original = chat.CONFIRM_POLL_SECONDS
+    chat.CONFIRM_POLL_SECONDS = 0.002
+    try:
+        yield
+    finally:
+        chat.CONFIRM_POLL_SECONDS = original
+
+
 def _confirm_soon(agent, approved):
     """Answer the next pending confirmation from a background thread, as a browser would."""
 
@@ -1737,7 +1758,8 @@ def test_write_confirmation_approved(my_predbat):
     cid = asyncio.run(agent.store.create())
 
     _confirm_soon(agent, True)
-    asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+    with _fast_confirm_poll():
+        asyncio.run(agent.run_turn(cid, "raise best soc keep"))
 
     kinds = [event["type"] for event in agent.events_since(0, cid)[0]]
     for required in ("confirm", "confirm_result", "tool_start", "tool_end"):
@@ -1762,7 +1784,8 @@ def test_write_confirmation_rejected(my_predbat):
     cid = asyncio.run(agent.store.create())
 
     _confirm_soon(agent, False)
-    asyncio.run(agent.run_turn(cid, "raise best soc keep"))
+    with _fast_confirm_poll():
+        asyncio.run(agent.run_turn(cid, "raise best soc keep"))
 
     results = [message for message in asyncio.run(agent.store.get_messages(cid)) if message["role"] == "tool"]
     if not results or "declined" not in str(results[0].get("content")).lower():
@@ -1852,7 +1875,8 @@ def test_set_apps_config_confirmation_gate_and_card(my_predbat):
         cid = asyncio.run(agent.store.create())
 
         _confirm_soon(agent, False)
-        asyncio.run(agent.run_turn(cid, "change the HA url"))
+        with _fast_confirm_poll():
+            asyncio.run(agent.run_turn(cid, "change the HA url"))
 
         events, _, _ = agent.events_since(0, cid)
         kinds = [event["type"] for event in events]
@@ -1912,7 +1936,8 @@ def test_set_apps_config_approved_writes_apps_yaml(my_predbat):
         cid = asyncio.run(agent.store.create())
 
         _confirm_soon(agent, True)
-        asyncio.run(agent.run_turn(cid, "change num_inverters"))
+        with _fast_confirm_poll():
+            asyncio.run(agent.run_turn(cid, "change num_inverters"))
 
         with open(os.path.join(temp_dir, "apps.yaml"), "r", encoding="utf-8") as handle:
             written = handle.read()
@@ -3137,7 +3162,8 @@ def test_stop_reaches_a_turn_parked_on_a_confirmation(my_predbat):
         approved = await agent.await_confirmation("call_x")
         return approved, time.monotonic() - started
 
-    approved, elapsed = asyncio.run(drive())
+    with _fast_confirm_poll():
+        approved, elapsed = asyncio.run(drive())
 
     if approved:
         print("ERROR: a stopped confirmation was treated as approved")
@@ -3779,6 +3805,133 @@ def test_a_working_catalogue_clears_the_previous_failure(my_predbat):
     return failed
 
 
+def _list_models_without_a_wire(my_predbat, providers):
+    """Run list_models() against a recording storage and a fetch that must not be called.
+
+    Returns (models, dialled, cache_names, catalogue_error). Both recorders matter and neither
+    substitutes for the other: dialled proves whether the endpoint was contacted, cache_names
+    proves whether the answer was written to storage - the two halves of what an unconfigured
+    install was doing every day.
+    """
+    dialled = []
+
+    async def fetch_should_not_run():
+        """Record the call and return a healthy catalogue, so a fetch that runs is not also empty."""
+        dialled.append(True)
+        return {"data": [{"id": "vendor/hosted", "supported_parameters": ["tools"]}]}
+
+    class RecordingStorage:
+        """Storage stand-in that records every fetch_cached name and otherwise behaves normally."""
+
+        def __init__(self):
+            """Start with nothing recorded."""
+            self.names = []
+
+        async def fetch_cached(self, module, filename, fetch_fn, fresh_minutes=30, stale_minutes=35, format="yaml"):
+            """Record the name asked for, then fetch as the real helper does on a cold cache."""
+            self.names.append(filename)
+            return await fetch_fn()
+
+    class StubComponents:
+        """Serves the recording storage to ComponentBase's read-only storage property."""
+
+        def __init__(self, storage):
+            """Hold the storage stand-in this registry should hand out."""
+            self.storage = storage
+
+        def get_component(self, name):
+            """Return the storage stand-in, and nothing else."""
+            return self.storage if name == "storage" else None
+
+    agent = _make_agent(my_predbat, providers=providers)
+    agent._fetch_model_catalogue = fetch_should_not_run
+    recorder = RecordingStorage()
+    # agent.storage is a read-only property reading base.components, so the registry is what has
+    # to be swapped - and put back, since my_predbat is shared with every other test.
+    previous_components = getattr(my_predbat, "components", None)
+    my_predbat.components = StubComponents(recorder)
+    try:
+        models = asyncio.run(agent.list_models())
+    finally:
+        my_predbat.components = previous_components
+    return models, dialled, recorder.names, agent.catalogue_error
+
+
+def test_the_catalogue_is_not_fetched_with_no_provider_configured(my_predbat):
+    """An install with nothing configured neither dials OpenRouter nor caches its catalogue.
+
+    The chat component is always started, even with nothing set up, because the Chat tab is what
+    configures it. With no provider, select_provider() falls back to OpenRouter's default URL with
+    no key - and OpenRouter serves /models unauthenticated, so the fetch came back 200 with the
+    whole several-hundred-model catalogue rather than the 401 that would have stopped it. Every
+    page view of the setup page therefore made an outbound request no user asked for, and cached
+    roughly 760KB of it for a day, for a catalogue that cannot be used until a provider exists.
+
+    The turn path already refuses here (see test_turn_refuses_with_no_provider_configured); this
+    is the same guard on the other path that reaches the wire.
+
+    Mutation check: dropping the provider_ready() guard from list_models() dials the endpoint and
+    writes the catalogue to storage.
+    """
+    failed = False
+    print("**** Testing that no provider configured means no catalogue fetch ****")
+
+    models, dialled, names, error = _list_models_without_a_wire(my_predbat, {})
+
+    if dialled:
+        print("ERROR: the catalogue endpoint was dialled with no provider configured")
+        failed = True
+    if names:
+        print("ERROR: the catalogue was written to storage with no provider configured: {}".format(names))
+        failed = True
+    if models:
+        print("ERROR: models were offered with no provider configured: {}".format(models))
+        failed = True
+    if error != NO_PROVIDER_MESSAGE:
+        print("ERROR: the picker was not told why there is no catalogue: {!r}".format(error))
+        failed = True
+    return failed
+
+
+def test_the_catalogue_is_not_fetched_for_a_provider_missing_its_key(my_predbat):
+    """A hosted provider written down without its key is not ready, so its catalogue is not fetched.
+
+    Half-configured is the commoner shape of the same bug: an entry exists, so select_provider()
+    makes it active and active_provider is not None, but it has no key and cannot answer a turn.
+    Guarding on "nothing is selected" would let this one straight through to the same
+    unauthenticated fetch, which is why the guard is provider_ready() - the predicate the turn
+    path already uses.
+
+    The picker still offers the model the entry names, because that is what it names; the guard is
+    about not reaching the wire, not about hiding what apps.yaml says.
+
+    Mutation check: guarding on active_provider is None instead of provider_ready() dials the
+    endpoint for this install.
+    """
+    failed = False
+    print("**** Testing that a provider missing its key does not fetch a catalogue ****")
+
+    providers = {"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1"}}
+    models, dialled, names, error = _list_models_without_a_wire(my_predbat, providers)
+
+    if dialled:
+        print("ERROR: the catalogue endpoint was dialled for a provider with no key")
+        failed = True
+    if names:
+        print("ERROR: the catalogue was written to storage for a provider with no key: {}".format(names))
+        failed = True
+    # The model the entry names is still offered - _catalogue_to_models() always includes the
+    # configured one, which is what makes a custom endpoint serving no /models at all usable. What
+    # must not appear is anything that could only have come off the wire.
+    if "vendor/hosted" in [entry["id"] for entry in models]:
+        print("ERROR: a fetched catalogue was served for a provider with no key: {}".format(models))
+        failed = True
+    if error != NO_PROVIDER_MESSAGE:
+        print("ERROR: the picker was not told why there is no catalogue: {!r}".format(error))
+        failed = True
+    return failed
+
+
 def test_model_catalogue_is_cached_per_endpoint(my_predbat):
     """Each endpoint's model list is cached under its own name, not one shared "models".
 
@@ -3889,11 +4042,282 @@ def test_model_catalogue_is_cached_per_endpoint(my_predbat):
     return failed
 
 
+def test_ollama_context_length_is_what_the_server_will_actually_give(my_predbat):
+    """The picker must report the usable context, not the model's architectural ceiling.
+
+    /api/show returns the context length baked into the model - 262144 for Qwen3.8 27B. The
+    server caps every model at OLLAMA_CONTEXT_LENGTH (an Ollama app setting on macOS), so the
+    context the model will actually be loaded with can be half that. Reporting the ceiling makes
+    the Chat tab's context counter measure fullness against a limit that does not exist: it reads
+    50% at the point the window is genuinely full, which is precisely how a turn overflows without
+    warning.
+
+    /api/ps reports context_length for each loaded model, which is the effective value.
+    """
+    failed = False
+    print("**** Testing Ollama context length comes from the server, not the model ****")
+
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "http://127.0.0.1:11434/v1"}})
+    agent.select_provider("ollama")
+
+    shown = {"qwen3.8:27b": 262144, "gpt-oss:20b": 131072, "never-loaded:8b": 262144}
+    loaded = {"qwen3.8:27b": 131072, "gpt-oss:20b": 131072}
+
+    class _Response:
+        """Minimal aiohttp response stand-in for the stubbed session."""
+
+        def __init__(self, payload):
+            self.status = 200
+            self._payload = payload
+
+        async def json(self):
+            """Return the canned body."""
+            return self._payload
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    class _Session:
+        """Stubbed session answering /api/show and /api/ps from the dicts above."""
+
+        def post(self, url, json=None):
+            """Answer an /api/show POST."""
+            model = (json or {}).get("model")
+            return _Response({"capabilities": ["tools"], "model_info": {"qwen35.context_length": shown[model]}})
+
+        def get(self, url):
+            """Answer an /api/ps GET."""
+            return _Response({"models": [{"model": name, "context_length": ctx} for name, ctx in loaded.items()]})
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    original_session = chat.aiohttp.ClientSession
+    chat.aiohttp.ClientSession = lambda *args, **kwargs: _Session()
+    try:
+        models = asyncio.run(agent._add_ollama_details([{"id": name} for name in shown]))
+    finally:
+        chat.aiohttp.ClientSession = original_session
+
+    by_id = {entry["id"]: entry for entry in models}
+
+    if by_id["qwen3.8:27b"].get("context_length") != 131072:
+        print("ERROR: a loaded model should report the server's 131072, not its 262144 ceiling, got {}".format(by_id["qwen3.8:27b"].get("context_length")))
+        failed = True
+
+    if by_id["gpt-oss:20b"].get("context_length") != 131072:
+        print("ERROR: a model whose ceiling already matches the server should be unchanged, got {}".format(by_id["gpt-oss:20b"].get("context_length")))
+        failed = True
+
+    # Nothing is known about a model the server has never loaded, so its own ceiling is the only
+    # answer available - better than inventing one.
+    if by_id["never-loaded:8b"].get("context_length") != 262144:
+        print("ERROR: an unloaded model should fall back to its own ceiling, got {}".format(by_id["never-loaded:8b"].get("context_length")))
+        failed = True
+
+    if not failed:
+        print("✓ Test passed: Ollama context length reflects what the server will give")
+    return failed
+
+
+def test_ollama_context_length_survives_a_server_that_cannot_answer(my_predbat):
+    """A server that will not serve /api/ps must leave every model on its own ceiling.
+
+    Ollama Cloud answers /api/ps with 401 while serving /api/show unauthenticated, and an older
+    local server may not have the endpoint at all. Neither may cost the catalogue its context
+    lengths - the fallback is exactly the behaviour from before /api/ps was consulted.
+    """
+    failed = False
+    print("**** Testing Ollama context length survives an unavailable /api/ps ****")
+
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "https://ollama.com/v1"}})
+    agent.select_provider("ollama")
+
+    class _ShowResponse:
+        """An /api/show answer carrying the model's own ceiling."""
+
+        status = 200
+
+        async def json(self):
+            """Return the canned body."""
+            return {"capabilities": ["tools"], "model_info": {"qwen35.context_length": 262144}}
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    class _Unauthorized:
+        """What ollama.com returns for /api/ps without a key.
+
+        The body deliberately carries a models array as well as the error. A refusal is not always
+        an empty envelope - a proxy or captive portal can answer with a plausible-looking payload -
+        and without the status check the values in it would be trusted. A body with nothing usable
+        in it would let that check be deleted with every test still passing.
+        """
+
+        status = 401
+
+        async def json(self):
+            """Return an error body that would poison the result if the status were ignored."""
+            return {"error": "unauthorized", "models": [{"model": "qwen3.8:27b", "context_length": 4096}]}
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    class _Session:
+        """Serves /api/show but refuses /api/ps, as Ollama Cloud does."""
+
+        def __init__(self, ps_raises=False):
+            self.ps_raises = ps_raises
+
+        def post(self, url, json=None):
+            """Answer the /api/show POST."""
+            return _ShowResponse()
+
+        def get(self, url):
+            """Refuse the /api/ps GET, by status or by raising."""
+            if self.ps_raises:
+                raise chat.aiohttp.ClientError("connection refused")
+            return _Unauthorized()
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    original_session = chat.aiohttp.ClientSession
+    try:
+        for label, raises in (("401", False), ("a transport error", True)):
+            chat.aiohttp.ClientSession = lambda *args, **kwargs: _Session(ps_raises=raises)
+            models = asyncio.run(agent._add_ollama_details([{"id": "qwen3.8:27b"}]))
+            context = models[0].get("context_length") if models else None
+            if context != 262144:
+                print("ERROR: /api/ps answering {} should leave the model on its 262144 ceiling, got {}".format(label, context))
+                failed = True
+
+        # Ollama Cloud refuses /api/ps with or without a key - verified against ollama.com, where a
+        # key good enough for /v1/models and /api/tags still gets a 401 here, because "loaded" is a
+        # local-server idea. A catalogue with nothing local in it has nothing the endpoint could
+        # override, so it should not spend a round trip finding that out.
+        asked = _Session()
+        calls = []
+        asked.get = lambda url: calls.append(url) or _Unauthorized()
+        chat.aiohttp.ClientSession = lambda *args, **kwargs: asked
+        asyncio.run(agent._add_ollama_details([{"id": "gpt-oss:120b-cloud", "remote": True}]))
+        if calls:
+            print("ERROR: a cloud-only catalogue should not call /api/ps, but it called {}".format(calls))
+            failed = True
+    finally:
+        chat.aiohttp.ClientSession = original_session
+
+    if not failed:
+        print("✓ Test passed: an unavailable /api/ps leaves the ceiling in place")
+    return failed
+
+
+def test_ollama_zero_context_length_is_treated_as_absent(my_predbat):
+    """A context length of zero means "unknown", not "a zero-token window".
+
+    Characterisation test, not a new behaviour: it pins a deliberate choice a reviewer read as an
+    accidental truthiness bug (#4859). No model has a zero-token context, so a 0 from either
+    endpoint is a placeholder or a bug, and letting it through would replace a perfectly good
+    figure with a useless one. The whole chain already agrees - _ollama_loaded_context() keeps only
+    truthy values, and on the client contextLengthForModel() returns `context_length || null` while
+    renderContextUsage() shows the token count alone when the limit is falsy.
+    """
+    failed = False
+    print("**** Testing a zero Ollama context length is treated as absent ****")
+
+    agent = _make_agent(my_predbat, providers={"ollama": {"type": "ollama", "url": "http://127.0.0.1:11434/v1"}})
+    agent.select_provider("ollama")
+
+    class _Response:
+        """Minimal aiohttp response stand-in."""
+
+        def __init__(self, payload):
+            self.status = 200
+            self._payload = payload
+
+        async def json(self):
+            """Return the canned body."""
+            return self._payload
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    class _Session:
+        """A server reporting a zero context for a loaded model."""
+
+        def post(self, url, json=None):
+            """Answer /api/show with a real ceiling."""
+            return _Response({"capabilities": ["tools"], "model_info": {"qwen35.context_length": 262144}})
+
+        def get(self, url):
+            """Answer /api/ps with a zero, as a placeholder or a bug would."""
+            return _Response({"models": [{"model": "qwen3.8:27b", "context_length": 0}]})
+
+        async def __aenter__(self):
+            """Enter the async context."""
+            return self
+
+        async def __aexit__(self, *args):
+            """Leave the async context."""
+            return False
+
+    original_session = chat.aiohttp.ClientSession
+    chat.aiohttp.ClientSession = lambda *args, **kwargs: _Session()
+    try:
+        models = asyncio.run(agent._add_ollama_details([{"id": "qwen3.8:27b"}]))
+    finally:
+        chat.aiohttp.ClientSession = original_session
+
+    context = models[0].get("context_length") if models else None
+    if context != 262144:
+        print("ERROR: a zero from /api/ps should not replace the 262144 ceiling, got {}".format(context))
+        failed = True
+
+    if not failed:
+        print("✓ Test passed: a zero context length falls back rather than propagating")
+    return failed
+
+
 def run_chat_tests(my_predbat):
     """Run every chat agent test, returning True if any of them failed."""
     failed = False
     failed |= test_model_catalogue_is_cached_per_endpoint(my_predbat)
+    failed |= test_ollama_context_length_is_what_the_server_will_actually_give(my_predbat)
+    failed |= test_ollama_context_length_survives_a_server_that_cannot_answer(my_predbat)
+    failed |= test_ollama_zero_context_length_is_treated_as_absent(my_predbat)
     failed |= test_a_working_catalogue_clears_the_previous_failure(my_predbat)
+    failed |= test_the_catalogue_is_not_fetched_with_no_provider_configured(my_predbat)
+    failed |= test_the_catalogue_is_not_fetched_for_a_provider_missing_its_key(my_predbat)
     failed |= test_local_models_are_free_however_little_pricing_they_publish(my_predbat)
     failed |= test_stop_reaches_a_turn_that_is_still_streaming(my_predbat)
     failed |= test_ollama_cloud_models_are_listed_but_not_free(my_predbat)

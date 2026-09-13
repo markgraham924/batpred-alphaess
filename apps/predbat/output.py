@@ -7,6 +7,7 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+# cspell:words ensuite
 
 
 """Output and sensor publishing module.
@@ -19,9 +20,9 @@ schedules, rate window sensors, and financial metric summaries.
 import math
 import copy
 from html import escape as escape_html
-from datetime import timedelta
+from datetime import datetime, timedelta
 from predbat import THIS_VERSION_DISPLAY
-from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, MINUTE_WATT
+from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, MINUTE_WATT, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate
 from prediction import Prediction
 
@@ -50,7 +51,99 @@ REASON_TEMPLATES = {
     "manual_override_export": "You manually set this slot to export.",
     "manual_override_freeze_export": "You manually set this slot to freeze exporting.",
     "manual_override_demand": "You manually set this slot to demand mode.",
+    "mixed_slot_states": "This slot did not hold one state throughout - Predbat was in: {states}. The cell shows the most significant of them.",
 }
+
+TOWEL_SCHEDULE_ENTITIES = (
+    ("Front", "sensor.front_ensuite_home_energy_orchestrator_front_ensuite_towel_schedule_status"),
+    ("Rear", "sensor.rear_ensuite_home_energy_orchestrator_rear_ensuite_towel_schedule_status"),
+)
+
+TOWEL_ACTUAL_ENTITIES = (
+    ("Front", "switch.front_ensuite_towel_radiator"),
+    ("Rear", "switch.rear_ensuite_radiator"),
+)
+
+
+def _history_timestamp(record):
+    """Return one Home Assistant history record's timestamp, if valid."""
+    value = record.get("last_updated", record.get("last_changed"))
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def active_history_blocks(records, window_start, window_end):
+    """Convert recorded on/off states into clamped actual-running blocks."""
+    if not isinstance(records, list) or window_end <= window_start:
+        return []
+    states = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        stamp = _history_timestamp(record)
+        if stamp is not None:
+            states.append((stamp, str(record.get("state", "")).lower()))
+    states.sort(key=lambda item: item[0])
+
+    active_start = None
+    blocks = []
+    for stamp, state in states:
+        if stamp < window_start:
+            active_start = window_start if state == "on" else None
+            continue
+        if stamp >= window_end:
+            break
+        if state == "on" and active_start is None:
+            active_start = max(stamp, window_start)
+        elif state != "on" and active_start is not None:
+            if stamp > active_start:
+                blocks.append({"start": active_start.isoformat(), "end": stamp.isoformat(), "reason": "recorded actual run", "actual": True})
+            active_start = None
+    if active_start is not None and window_end > active_start:
+        blocks.append({"start": active_start.isoformat(), "end": window_end.isoformat(), "reason": "recorded actual run", "actual": True})
+    return blocks
+
+
+def slot_has_flagged_minute(minute_start, minute_end, flagged_minutes):
+    """Return true when a plan slot overlaps a recorded per-minute flag."""
+    return any(minute in flagged_minutes for minute in range(minute_start, minute_end))
+
+
+def status_has_ev_hold(status):
+    """Return true only when recorded Predbat status says the battery held for the car."""
+    return "hold for car" in str(status).lower()
+
+
+def towel_schedule_for_slot(slot_start, slot_end, schedules):
+    """Return the towel labels and details whose blocks overlap one plan slot."""
+    active = []
+    details = []
+    for label, blocks in schedules:
+        if not isinstance(blocks, list):
+            continue
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            try:
+                block_start = datetime.fromisoformat(str(block.get("start", "")).replace("Z", "+00:00"))
+                block_end = datetime.fromisoformat(str(block.get("end", "")).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            if block_start < slot_end and block_end > slot_start:
+                active.append(label)
+                rate = block.get("effective_rate_pence")
+                rate_text = "" if rate is None else " at {}p/kWh".format(rate)
+                reason = block.get("reason")
+                reason_text = "" if not reason else " ({})".format(reason)
+                details.append("{} {}-{}{}{}".format(label, block_start.astimezone().strftime("%H:%M"), block_end.astimezone().strftime("%H:%M"), rate_text, reason_text))
+                break
+    if not active:
+        return "", "No towel radiator is scheduled in this slot", "#FFFFFF"
+    return " + ".join(active), "; ".join(details), "#D8B4FE"
 
 
 def yesterday_slot_is_exporting(slot_status):
@@ -97,6 +190,58 @@ def alphaess_plan_mode(
             reason += " - high-SoC anti-curtailment policy"
         return "Mode 19", reason, "#AAAAAA", high_soc_policy_active
     return "Normal", "Normal Mode (5)", "#FFFFFF", high_soc_policy_active
+
+
+def more_active_slot_status(current, candidate, precedence):
+    """Pick the more significant of two ``predbat.status`` strings, used to break a tie in
+    ``dominant_slot_status()`` below.
+
+    ``precedence`` is one of the most-active-first lists in const.py, matched case-insensitively and
+    exactly - "freeze exporting" contains "exporting", so a substring test would rank every export
+    sub-state as a full export. "Cross-charging" appears in neither list yet counts on both sides
+    (see ``yesterday_slot_is_exporting``); it ranks above everything, because a fleet charging and
+    discharging at once is the state a reader most needs to see. Anything else - Demand, Read-Only,
+    a Hold-for-car annotation - ranks last, and an incumbent is kept on a tie so the *first* of two
+    equal states wins rather than the last.
+    """
+    if not current:
+        return candidate
+
+    def rank(status):
+        if status == "cross-charging":
+            return -1
+        for index, entry in enumerate(precedence):
+            if status == entry.lower():
+                return index
+        return len(precedence)
+
+    return candidate if rank(candidate) < rank(current) else current
+
+
+def dominant_slot_status(minute_counts, precedence):
+    """Pick the ``predbat.status`` that held the most minutes of a history slot, from a
+    ``{status: minutes}`` tally.
+
+    ``calculate_yesterday()`` renders each 30-minute slot as a single charge or export state, but a
+    slot can legitimately contain more than one - a force export that hits its target part way
+    through drops to freeze export, and a manual override can change the state at any minute. The
+    reconstruction used to assign unconditionally as it scanned, so whichever state ran *last* won
+    and an earlier one that actually held the slot vanished: #4840's force export from 17:05-17:17
+    was erased by the freeze export that followed it at 17:18, and the History view showed no export
+    at all. The cell should instead show whichever state genuinely dominated the slot's minutes.
+
+    A tie - most often an exact even split - is broken with ``more_active_slot_status``, which also
+    carries the cross-charging special case.
+    """
+    if not minute_counts:
+        return ""
+
+    most_minutes = max(minute_counts.values())
+    dominant = ""
+    for status, minutes in minute_counts.items():
+        if minutes == most_minutes:
+            dominant = more_active_slot_status(dominant, status, precedence)
+    return dominant
 
 
 class Output:
@@ -613,7 +758,7 @@ class Output:
                 symbol = "?"
         return symbol
 
-    def get_html_plan_header(self, plan_debug, alphaess_mode_column=False):
+    def get_html_plan_header(self, plan_debug, alphaess_mode_column=False, towel_schedule_column=False):
         """
         Returns the header row for the HTML plan.
         """
@@ -629,6 +774,8 @@ class Output:
         html += "<th colspan=2><b>State</b></th>"  # state can potentially be two cells for charging and exporting in the same slot
         if alphaess_mode_column:
             html += "<th><b>AlphaESS mode</b></th>"
+        if towel_schedule_column:
+            html += "<th><b>Towels</b></th>"
         html += "<th><b>Limit %</b></th>"
         if plan_debug:
             html += "<th><b>PV kWh (10%)</b></th>"
@@ -1076,6 +1223,17 @@ class Output:
         html = ""
         plan_debug = self.plan_debug
         alphaess_mode_column = self.get_arg("plan_alphaess_mode_column", False)
+        towel_schedule_column = self.get_arg("plan_towel_schedule_column", False)
+        towel_schedules = []
+        if towel_schedule_column:
+            towel_schedule_override = getattr(self, "_towel_schedule_override", None)
+            if towel_schedule_override is not None:
+                towel_schedules = towel_schedule_override
+            else:
+                for towel_label, towel_entity in TOWEL_SCHEDULE_ENTITIES:
+                    towel_blocks = self.get_state_wrapper(towel_entity, attribute="blocks", default=[])
+                    towel_schedules.append((towel_label, towel_blocks))
+        alphaess_ev_hold_minutes_override = getattr(self, "_alphaess_ev_hold_minutes_override", None)
         alphaess_high_soc_enter = float(self.get_arg("plan_alphaess_high_soc_enter", 95.0))
         alphaess_high_soc_exit = float(self.get_arg("plan_alphaess_high_soc_exit", 93.0))
         alphaess_high_soc_policy_active = False
@@ -1089,7 +1247,7 @@ class Output:
             mode += " (debug)"
         html += "<table>"
         html += "<tr>"
-        html += self.get_html_plan_header(plan_debug, alphaess_mode_column)
+        html += self.get_html_plan_header(plan_debug, alphaess_mode_column, towel_schedule_column)
         # Use plan_interval_minutes instead of hardcoded 30
         minute_now_align = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
         end_plan = min(end_record, self.forecast_minutes) + minute_now_align
@@ -1139,6 +1297,7 @@ class Output:
         raw_plan["iboost_enable"] = self.iboost_enable
         raw_plan["carbon_enable"] = self.carbon_enable
         raw_plan["alphaess_mode_column"] = alphaess_mode_column
+        raw_plan["towel_schedule_column"] = towel_schedule_column
         raw_plan["manual_load_value"] = self.get_arg("manual_load_value", 0.5)
 
         rate_start = self.midnight_utc
@@ -1221,6 +1380,7 @@ class Output:
 
             in_alert = self.alert_active_keep.get(minute, 0) > 0
             in_manual_soc = self.manual_soc_keep.get(minute, 0) > 0
+            in_manual_soc_max = self.manual_soc_max_keep.get(minute, 0) > 0
 
             pv_forecast = 0
             load_forecast = 0
@@ -1316,6 +1476,7 @@ class Output:
             soc_color = "#3AEE85"
             pv_symbol = ""
             split = False
+            raw_state_mixed = None
 
             if soc_percent < 20.0:
                 soc_color = "#F18261"
@@ -1486,11 +1647,29 @@ class Output:
                     raw_state_override = "Manual export freeze"
                     reason_parts.append({"code": "manual_override_freeze_export", "params": {}})
 
+            # A history slot can hold more than one state - Predbat re-runs every few minutes and a
+            # manual override can land on any minute - but a row shows exactly one. Mark a collapsed
+            # slot with an asterisk and list what actually happened in the row's reasons, which is a
+            # list and so copes with all six states a 30 minute slot can hold, unlike the two-way
+            # state/state2 split cell (#4843). Only calculate_yesterday()'s reconstruction sets
+            # "mixed" - forward plan windows never carry it, so the live plan is untouched.
+            mixed_states = []
+            if charge_window_n >= 0:
+                mixed_states += self.charge_window_best[charge_window_n].get("mixed", [])
+            if export_window_n >= 0:
+                mixed_states += self.export_window_best[export_window_n].get("mixed", [])
+            if mixed_states:
+                state += "*"
+                raw_state_mixed = [entry.capitalize() for entry in mixed_states]
+                reason_parts.append({"code": "mixed_slot_states", "params": {"states": ", ".join(raw_state_mixed)}})
+
             # Alert
             if in_alert:
                 soc_sym = "&#9888; " + soc_sym
             if in_manual_soc:
                 soc_sym = "&#9998; " + soc_sym
+            if in_manual_soc_max:
+                soc_sym = "&#11015; " + soc_sym
 
             # Import and export rates -> to string
             adjust_type = self.rate_import_replicated.get(minute, None)
@@ -1622,7 +1801,10 @@ class Output:
                 charge_planned = charge_window_n >= 0 and self.charge_limit_best[charge_window_n] > 0.0
                 freeze_export_planned = export_window_n >= 0 and self.export_limits_best[export_window_n] == EXPORT_LIMIT_FREEZE
                 force_export_planned = export_window_n >= 0 and self.export_limits_best[export_window_n] < EXPORT_LIMIT_IDLE and not freeze_export_planned
-                car_planned = self.num_cars > 0 and car_charging_kwh > 0.0
+                if alphaess_ev_hold_minutes_override is None:
+                    car_planned = self.num_cars > 0 and car_charging_kwh > 0.0
+                else:
+                    car_planned = slot_has_flagged_minute(minute_start, minute_end, alphaess_ev_hold_minutes_override)
                 alphaess_mode, alphaess_mode_title, alphaess_mode_color, alphaess_high_soc_policy_active = alphaess_plan_mode(
                     charge_planned,
                     car_planned,
@@ -1632,6 +1814,16 @@ class Output:
                     alphaess_high_soc_policy_active,
                     alphaess_high_soc_enter,
                     alphaess_high_soc_exit,
+                )
+
+            towel_schedule = ""
+            towel_schedule_title = ""
+            towel_schedule_color = "#FFFFFF"
+            if towel_schedule_column:
+                towel_schedule, towel_schedule_title, towel_schedule_color = towel_schedule_for_slot(
+                    rate_start,
+                    rate_start + timedelta(minutes=self.plan_interval_minutes),
+                    towel_schedules,
                 )
 
             # Work out clipped
@@ -1685,6 +1877,8 @@ class Output:
                 html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
             elif alphaess_mode_column:
                 html += '<td id=alphaess_mode bgcolor={} title="{}">{}</td>'.format(alphaess_mode_color, escape_html(alphaess_mode_title, quote=True), alphaess_mode)
+            if towel_schedule_column:
+                html += '<td id=towel_schedule bgcolor={} title="{}">{}</td>'.format(towel_schedule_color, escape_html(towel_schedule_title, quote=True), towel_schedule)
             html += "<td id=pv bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
             html += "<td id=load data-minute=" + str(minute) + " bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
             if plan_debug:
@@ -1721,11 +1915,16 @@ class Output:
             json_row["state"] = raw_state
             json_row["state_target"] = raw_state_target
             json_row["state_override"] = raw_state_override
+            json_row["state_mixed"] = raw_state_mixed
             json_row["state_html"] = state
             if alphaess_mode_column:
                 json_row["alphaess_mode"] = alphaess_mode
                 json_row["alphaess_mode_title"] = alphaess_mode_title
                 json_row["alphaess_mode_color"] = alphaess_mode_color
+            if towel_schedule_column:
+                json_row["towel_schedule"] = towel_schedule
+                json_row["towel_schedule_title"] = towel_schedule_title
+                json_row["towel_schedule_color"] = towel_schedule_color
 
             json_row["reasons"] = reason_parts if reason_parts else demand_reason
 
@@ -1815,6 +2014,8 @@ class Output:
         html += '<tr style="color:black">'
         html += "<td></td><td></td><td></td><td></td><td></td>"
         if alphaess_mode_column:
+            html += "<td></td>"
+        if towel_schedule_column:
             html += "<td></td>"
         html += "<td></td>"
         html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(pv_total))
@@ -2454,7 +2655,7 @@ class Output:
                 },
             )
 
-    def publish_charge_limit(self, charge_limit, charge_window, best=False, soc={}):
+    def publish_charge_limit(self, charge_limit, charge_window, best=False, soc=None):
         """
         Create entity to chart charge limit
 
@@ -2467,6 +2668,8 @@ class Output:
 
         """
         # Calculate charge_limit_percent from charge_limit
+        if soc is None:
+            soc = {}
         charge_limit_percent = calc_percent_limit(charge_limit, self.soc_max)
 
         charge_limit_time = {}
@@ -2639,7 +2842,7 @@ class Output:
                 # Already in error state, do not notify second error in a single run (spam)
                 pass
             else:
-                self.call_notify("Predbat status change to: " + message + extra)
+                self.call_notify(f"{self.prefix.capitalize()} status change to: {message}{extra}")
                 self.previous_status = message
 
         error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
@@ -2651,9 +2854,15 @@ class Output:
         if had_errors:
             error_count += 1
 
+        # Home Assistant rejects entity states over 255 characters, and this message is the state
+        # of the status sensor. Clamp what is written as the state - the full text survives in
+        # current_status, the log line and the notification, and attributes have no such cap.
+        # Motivated by the window warnings listing every configured inverter component (#4990):
+        # three or more of those push past 255, so the dashboard would keep a stale status on
+        # exactly the cycles the warning matters.
         self.dashboard_item(
             self.prefix + ".status",
-            state=message,
+            state=message[:255],
             attributes={
                 "friendly_name": "Status",
                 "detail": extra,
@@ -3006,7 +3215,20 @@ class Output:
         )
         self.dashboard_item("binary_sensor." + self.prefix + "_demand", state="on" if isDemand else "off", attributes={"friendly_name": "Predbat is in demand mode", "icon": "mdi:battery-arrow-up"})
 
-    def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step):
+    def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step, minutes_now):
+        """Rebuild car charging slots for yesterday and today-so-far, and subtract them from the load band.
+
+        :param end_record: last plan-axis minute to reconstruct. calculate_yesterday widens
+            yesterday_load_step to cover today-so-far too (0 = yesterday midnight, up to
+            24*60 + minutes_now = now), so this must be passed the same width - reconstructing
+            only the first 24*60 minutes leaves today's sessions in the raw, unsplit load band
+            until the next day's run rolls them into the now-covered "yesterday" range (#5004).
+        :param yesterday_load_step: load per PREDICT_STEP, keyed on that same plan axis.
+        :param minutes_now: real minutes_now of the live plan. calculate_yesterday fakes
+            self.minutes_now to 0 before calling this, but car_charging_energy is still
+            indexed in minutes before the real now, so the lookup must use the real value
+            (#5004).
+        """
         # Normalize to list for multi-car support
         entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
         if entity_id_config and not isinstance(entity_id_config, list):
@@ -3022,12 +3244,21 @@ class Output:
 
         # re-construct car charging slots from non-octopus using the car energy sensor
         # sum the energy over each 30 minutes and add it to the car plan if missing
-        if self.num_cars > 0:
+        if self.num_cars > 0 and self.car_charging_energy:
             for start_minute in range(0, end_record, self.plan_interval_minutes):
                 car_energy = 0
-                for minute in range(start_minute, start_minute + self.plan_interval_minutes):
-                    minute_previous = self.minutes_now + 24 * 60 - minute  # How far back in time are we looking
-                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_previous)
+                # end_record is minutes_now + 24*60 - the real "now" on this widened axis - but
+                # end_record is not generally a multiple of plan_interval_minutes (minutes_now is
+                # only rounded to PREDICT_STEP, 5 minutes, not to the 30-minute plan interval), so
+                # the last bucket can run past it. get_historical_base()'s minute_previous
+                # (minutes_now + 24*60) - minute then goes negative for those extra minutes, and
+                # get_from_incrementing() silently wraps a negative index by +24*60 - reading
+                # yesterday's data at roughly the same clock time instead of "nothing yet", and
+                # miscounting it into today's final bucket (the ghost-slot mechanism #5004 was
+                # fixed for elsewhere, review on #5048). Clamp the inner scan to end_record so it
+                # never reads past the real "now" this function was asked to reconstruct up to.
+                for minute in range(start_minute, min(start_minute + self.plan_interval_minutes, end_record)):
+                    car_energy += self.get_historical_base(self.car_charging_energy, minute, minutes_now + 24 * 60)
                 if car_energy > 0.1:
                     # Only add the slot if there isn't already one covering this time period
                     if not any(slot["start"] <= start_minute < slot["end"] for slot in self.car_charging_slots[0]):
@@ -3213,6 +3444,15 @@ class Output:
         # Get status history
         predbat_status_data = self.get_history_wrapper(entity_id=self.prefix + ".status", days=2, required=False)
 
+        towel_actual_schedules = []
+        if self.get_arg("plan_towel_schedule_column", False):
+            actual_window_start = self.midnight_utc - timedelta(days=1)
+            actual_window_end = self.midnight_utc
+            for towel_label, towel_entity in TOWEL_ACTUAL_ENTITIES:
+                towel_history = self.get_history_wrapper(entity_id=towel_entity, days=2, required=False, tracked=False)
+                towel_records = towel_history[0] if towel_history and towel_history[0] else []
+                towel_actual_schedules.append((towel_label, active_history_blocks(towel_records, actual_window_start, actual_window_end)))
+
         # Work out battery value yesterday
         overall_metric, battery_value_yesterday = self.compute_metric(end_record, battery_soc_yesterday, battery_soc_yesterday, cost_yesterday, cost_yesterday, 0, 0, 0, 0, 0, 0, 0, 0)
         cost_yesterday_adjusted = cost_yesterday - battery_value_yesterday
@@ -3282,7 +3522,12 @@ class Output:
         self.car_charging_soc = [0] * len(self.car_charging_soc)
 
         # re-construct car charging slots from non-octopus using the sensor
-        self.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
+        # Pass the real minutes_now: self.minutes_now has been faked to 0 above, but the car
+        # energy history is still indexed from the real now (#5004). Pass end_record + minutes_now,
+        # not the bare yesterday-only end_record, so the reconstruction reaches as far into today
+        # as yesterday_load_step itself already does - otherwise today's sessions are left in the
+        # raw load band until the next day's run (#5004 follow-up).
+        self.yesterday_reconstruct_car_slots(end_record + minutes_now, yesterday_load_step, minutes_now)
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, soc_kw=soc_yesterday)
@@ -3327,47 +3572,70 @@ class Output:
         self.predict_metric_best = cost_yesterday_array
 
         # Fake charge/export windows based on previous predbat status
+        alphaess_ev_hold_minutes = set()
         if predbat_status_data:
-            predbat_status = minute_data_state(predbat_status_data[0], 2, self.now_utc, "state", "last_updated")
+            predbat_status_full = minute_data_state(predbat_status_data[0], 2, self.now_utc, "state", "last_updated")
+            predbat_status = dict(predbat_status_full)
             for minute in predbat_status:
-                status = predbat_status[minute]
+                status = predbat_status_full[minute]
                 if "," in status:
                     # If there are multiple statuses take the first one
                     predbat_status[minute] = status.split(",")[0].strip()
+            # Ignore the first and last edge_minutes of each slot when they don't hold one state
+            # throughout - Predbat's reported status can lag a slot boundary by a minute or two while
+            # it catches up to a replan, and that leftover from the previous (or next) slot must not
+            # be mistaken for a real part of this one. A status occupying the *whole* edge window,
+            # though, is indistinguishable from a genuine replan landing right at the boundary, so it
+            # is trusted like any interior minute rather than discarded on principle.
+            edge_minutes = 5
             for minute in range(0, end_record + minutes_now, self.plan_interval_minutes):
                 minute_offset = minutes_now + end_record - minute
-                charge_during_slot = ""
-                export_during_slot = ""
+
+                # predbat_status is keyed by minutes AGO, so the status for plan-minute
+                # (minute + slot_offset) lives at (minute_offset - slot_offset).
+                slot_statuses = [predbat_status.get(minute_offset - slot_offset, "").lower() for slot_offset in range(self.plan_interval_minutes)]
+                tally_start = 0 if len(set(slot_statuses[:edge_minutes])) == 1 else edge_minutes
+                tally_end = self.plan_interval_minutes if len(set(slot_statuses[-edge_minutes:])) == 1 else self.plan_interval_minutes - edge_minutes
+
                 charge_start_minute = None
                 charge_end_minute = None
                 export_start_minute = None
                 export_end_minute = None
 
-                # Searching for charge or export in this slot, ignore the first and last 5 minutes to avoid edge effects
-                for slot_offset in range(5, self.plan_interval_minutes - 5):
-                    slot_minute = minute_offset - self.plan_interval_minutes + slot_offset
-                    slot_status = predbat_status.get(slot_minute, "").lower()
-                    real_minute = minute + slot_offset
+                # Walk exactly the minutes the tally below trusts. The two must agree: the tally
+                # decides *whether* a slot rebuilds a charge or export window and this walk decides
+                # *where* that window starts, so a state the tally counts but this walk never sees
+                # produces a window with start/end still None, and in_charge_window() then compares
+                # an int against None and takes down the whole update_pred() cycle (regression from #4872).
+                # A state found anywhere in the slot's leading edge window still snaps back to the
+                # slot boundary, as it always has - a state already running that early reads as
+                # having opened the slot, and the History view renders whole slots regardless.
+                for slot_offset in range(tally_start, tally_end):
+                    slot_status = slot_statuses[slot_offset]
+                    real_minute = minute if slot_offset <= edge_minutes else minute + slot_offset
+                    slot_minute = minute_offset - slot_offset
+                    slot_status_full = predbat_status_full.get(slot_minute, "").lower()
+
+                    if status_has_ev_hold(slot_status_full):
+                        alphaess_ev_hold_minutes.add(real_minute)
 
                     # Cross-charging genuinely straddles both sides - track it as both an exporting
                     # and a charging slot (its name contains "charging" but not "exporting"), so
                     # these are independent "if"s rather than "if/elif".
-                    if yesterday_slot_is_exporting(slot_status):
-                        export_during_slot = slot_status
-                        if export_start_minute is None:
-                            export_start_minute = real_minute
-                            if slot_offset == 5:
-                                export_start_minute -= 5
-                            if charge_start_minute is not None:
-                                charge_end_minute = export_start_minute
-                    if "charging" in slot_status:
-                        charge_during_slot = slot_status
-                        if charge_start_minute is None:
-                            charge_start_minute = real_minute
-                            if slot_offset == 5:
-                                charge_start_minute -= 5
-                            if export_start_minute is not None:
-                                export_end_minute = charge_start_minute
+                    # One side starting *later* than the other ends the earlier one - the slot hands
+                    # off mid-way. Starting at the same minute is not a handoff but an overlap: both
+                    # run the whole slot, which is exactly what cross-charging is. Ending the earlier
+                    # side at the later one's start would then close it at its own start minute, and
+                    # a zero-width window renders as nothing at all - which is how the export half of
+                    # a cross-charging slot went missing again after #4466 restored it.
+                    if yesterday_slot_is_exporting(slot_status) and export_start_minute is None:
+                        export_start_minute = real_minute
+                        if charge_start_minute is not None and charge_start_minute < export_start_minute:
+                            charge_end_minute = export_start_minute
+                    if "charging" in slot_status and charge_start_minute is None:
+                        charge_start_minute = real_minute
+                        if export_start_minute is not None and export_start_minute < charge_start_minute:
+                            export_end_minute = charge_start_minute
 
                 # Assume slots end at end of period if not found
                 if export_end_minute is None and export_start_minute is not None:
@@ -3375,9 +3643,27 @@ class Output:
                 if charge_end_minute is None and charge_start_minute is not None:
                     charge_end_minute = minute + self.plan_interval_minutes
 
+                # Tally how many trusted minutes each status held, so the cell can show whichever one
+                # actually dominated the slot rather than whichever the scan above happened to detect
+                # first (#4843).
+                export_minute_counts = {}
+                charge_minute_counts = {}
+                for slot_offset in range(tally_start, tally_end):
+                    slot_status = slot_statuses[slot_offset]
+                    if yesterday_slot_is_exporting(slot_status):
+                        export_minute_counts[slot_status] = export_minute_counts.get(slot_status, 0) + 1
+                    if "charging" in slot_status:
+                        charge_minute_counts[slot_status] = charge_minute_counts.get(slot_status, 0) + 1
+
+                export_during_slot = dominant_slot_status(export_minute_counts, EXPORT_STATE_PRECEDENCE)
+                charge_during_slot = dominant_slot_status(charge_minute_counts, CHARGE_STATE_PRECEDENCE)
+
                 if yesterday_slot_is_exporting(export_during_slot):
                     # Assume exporting at this time
-                    self.export_window_best.append({"start": export_start_minute, "end": export_end_minute})
+                    export_window = {"start": export_start_minute, "end": export_end_minute}
+                    if len(export_minute_counts) > 1:
+                        export_window["mixed"] = list(export_minute_counts.keys())
+                    self.export_window_best.append(export_window)
                     if "freeze" in export_during_slot:
                         # Assume freeze export
                         self.export_limits_best.append(EXPORT_LIMIT_FREEZE)
@@ -3388,7 +3674,10 @@ class Output:
 
                 if "charging" in charge_during_slot:
                     # Assume charging at this time
-                    self.charge_window_best.append({"start": charge_start_minute, "end": charge_end_minute})
+                    charge_window = {"start": charge_start_minute, "end": charge_end_minute}
+                    if len(charge_minute_counts) > 1:
+                        charge_window["mixed"] = list(charge_minute_counts.keys())
+                    self.charge_window_best.append(charge_window)
                     if "freeze" in charge_during_slot:
                         # Assume freeze charge
                         self.charge_limit_best.append(self.reserve)
@@ -3397,8 +3686,22 @@ class Output:
 
         # Simulate yesterday with actual charge/export windows
         self.forecast_minutes = end_record + minutes_now
-        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False, prediction=self.prediction)
-        self.forecast_minutes = end_record
+        previous_towel_override = getattr(self, "_towel_schedule_override", None)
+        previous_ev_hold_override = getattr(self, "_alphaess_ev_hold_minutes_override", None)
+        self._towel_schedule_override = towel_actual_schedules
+        self._alphaess_ev_hold_minutes_override = alphaess_ev_hold_minutes
+        try:
+            plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False, prediction=self.prediction)
+        finally:
+            self.forecast_minutes = end_record
+            if previous_towel_override is None:
+                del self._towel_schedule_override
+            else:
+                self._towel_schedule_override = previous_towel_override
+            if previous_ev_hold_override is None:
+                del self._alphaess_ev_hold_minutes_override
+            else:
+                self._alphaess_ev_hold_minutes_override = previous_ev_hold_override
 
         # Restore state
         self.charge_limit_best = previous_charge_limit_best

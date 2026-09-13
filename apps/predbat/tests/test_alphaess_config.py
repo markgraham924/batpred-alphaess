@@ -8,10 +8,12 @@
 
 """Tests for the AlphaESS component registration, INVERTER_DEF entry and APPS_SCHEMA keys."""
 
+from datetime import UTC, datetime, timedelta
+
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 from config import INVERTER_DEF, APPS_SCHEMA
 from components import COMPONENT_LIST
-from output import alphaess_plan_mode
+from output import active_history_blocks, alphaess_plan_mode, slot_has_flagged_minute, status_has_ev_hold, towel_schedule_for_slot
 
 
 def test_alphaess_component_registered():
@@ -146,6 +148,7 @@ def test_alphaess_apps_schema_keys():
         "alphaess_api_delay": "float",
         "alphaess_min_write_interval": "integer",
         "plan_alphaess_mode_column": "boolean",
+        "plan_towel_schedule_column": "boolean",
         "plan_alphaess_high_soc_enter": "float",
         "plan_alphaess_high_soc_exit": "float",
     }
@@ -186,6 +189,67 @@ def test_alphaess_plan_mode_mapping():
         assert high_soc is expected_high_soc
 
 
+def test_towel_schedule_plan_column_mapping():
+    """Scheduled towel blocks map only to overlapping Predbat rows."""
+    start = datetime(2026, 8, 31, 1, 0, tzinfo=UTC)
+    schedules = [
+        (
+            "Front",
+            [
+                {
+                    "start": start.isoformat(),
+                    "end": (start + timedelta(minutes=30)).isoformat(),
+                    "effective_rate_pence": 8,
+                    "reason": "grid import",
+                }
+            ],
+        ),
+        ("Rear", []),
+    ]
+    label, title, color = towel_schedule_for_slot(start, start + timedelta(minutes=30), schedules)
+    assert label == "Front"
+    assert "8p/kWh" in title
+    assert "grid import" in title
+    assert color == "#D8B4FE"
+
+    label, _title, color = towel_schedule_for_slot(start + timedelta(minutes=30), start + timedelta(minutes=60), schedules)
+    assert label == ""
+    assert color == "#FFFFFF"
+
+
+def test_actual_towel_history_mapping():
+    """Recorded radiator transitions remain visible after the live schedule clears."""
+    start = datetime(2026, 9, 3, 0, 0, tzinfo=UTC)
+    records = [
+        {"state": "off", "last_updated": (start - timedelta(hours=1)).isoformat()},
+        {"state": "on", "last_updated": (start + timedelta(hours=1, minutes=30)).isoformat()},
+        {"state": "off", "last_updated": (start + timedelta(hours=6)).isoformat()},
+    ]
+    blocks = active_history_blocks(records, start, start + timedelta(days=1))
+    assert blocks == [
+        {
+            "start": (start + timedelta(hours=1, minutes=30)).isoformat(),
+            "end": (start + timedelta(hours=6)).isoformat(),
+            "reason": "recorded actual run",
+            "actual": True,
+        }
+    ]
+    label, title, color = towel_schedule_for_slot(start + timedelta(hours=2), start + timedelta(hours=2, minutes=30), [("Rear", blocks)])
+    assert label == "Rear"
+    assert "recorded actual run" in title
+    assert color == "#D8B4FE"
+
+
+def test_actual_ev_hold_history_mapping():
+    """Historical car energy alone does not imply that battery hold was active."""
+    assert status_has_ev_hold("Hold charging, Hold for car")
+    assert not status_has_ev_hold("Charging")
+    assert not status_has_ev_hold("Demand")
+    flagged = set(range(60, 90))
+    assert slot_has_flagged_minute(60, 90, flagged)
+    assert not slot_has_flagged_minute(90, 120, flagged)
+
+
 def run_alphaess_config_tests(my_predbat):
     """Run all AlphaESS config/INVERTER_DEF tests."""
     failed = False
@@ -195,6 +259,9 @@ def run_alphaess_config_tests(my_predbat):
         ("inverter_def", test_alphaess_inverter_def_complete),
         ("apps_schema", test_alphaess_apps_schema_keys),
         ("plan_mode_mapping", test_alphaess_plan_mode_mapping),
+        ("towel_schedule_column", test_towel_schedule_plan_column_mapping),
+        ("towel_actual_history", test_actual_towel_history_mapping),
+        ("ev_hold_actual_history", test_actual_ev_hold_history_mapping),
     ]:
         try:
             if fn():

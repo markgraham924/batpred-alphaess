@@ -6547,19 +6547,22 @@ def get_plan_css():
         closeDropdowns();
     }
 
-    // Handle SOC override
-    function handleSocOverride(time, dropdownId, isClear) {
+    // Handle SOC override (isMax selects the manual_soc_max ceiling instead of the manual_soc floor)
+    function handleSocOverride(time, dropdownId, isClear, isMax) {
+        const inputPrefix = isMax ? 'socmax_' : 'soc_';
+        const overrideKey = isMax ? 'manual_soc_max' : 'manual_soc';
+
         // Get the SOC value from the input field (unless clearing)
         let value = null;
         if (!isClear && dropdownId) {
-            const inputElement = document.getElementById('soc_' + dropdownId);
+            const inputElement = document.getElementById(inputPrefix + dropdownId);
             if (inputElement) {
                 value = inputElement.value;
             }
         } else if (isClear) {
             // When clearing, we need to find the actual stored SOC for this time
             const minutesFromMidnight = getMinutesFromTimeString(time);
-            const override = window.overridesData.manual_soc.find(r => r.minutes === minutesFromMidnight);
+            const override = window.overridesData[overrideKey].find(r => r.minutes === minutesFromMidnight);
             if (override) {
                 value = override.target;
             } else {
@@ -6568,7 +6571,7 @@ def get_plan_css():
         }
 
         // Construct the action string the server expects
-        const action = isClear ? 'Clear SOC' : 'Set SOC';
+        const action = isMax ? (isClear ? 'Clear SOC Max' : 'Set SOC Max') : (isClear ? 'Clear SOC' : 'Set SOC');
 
         // Create a form data object to send the override parameters
         const formData = new FormData();
@@ -6586,10 +6589,11 @@ def get_plan_css():
             if (data.success) {
                 // Show success message
                 const messageElement = document.createElement('div');
+                const label = isMax ? 'SOC max' : 'SOC';
                 if (isClear) {
-                    messageElement.textContent = `SOC override cleared for ${time}`;
+                    messageElement.textContent = `${label} override cleared for ${time}`;
                 } else {
-                    messageElement.textContent = `SOC target set to ${value}% for ${time}`;
+                    messageElement.textContent = `${label} target set to ${value}% for ${time}`;
                 }
                 messageElement.style.position = 'fixed';
                 messageElement.style.top = '65px';
@@ -6741,6 +6745,7 @@ def get_plan_renderer_js():
                 export: `The export rate for this slot, in ${currencyMinor} per kWh. Bold if a discharge/export is planned this slot.`,
                 state: "What the battery is doing this slot - hover a state cell for the specific reason.",
                 alphaess_mode: 'The physical mode the guarded AlphaESS controller is expected to apply this slot.',
+                towels: 'Price-capped towel-radiator runs selected by Home Energy Orchestrator for this slot.',
                 limit: 'The battery SoC Predbat is planning to reach by the end of this slot.',
                 pv: 'Predicted solar generation for this slot, from the Solcast forecast.',
                 load: 'Predicted house electricity consumption for this slot, from historical data.',
@@ -6770,6 +6775,9 @@ def get_plan_renderer_js():
             html += th('state', 'State', ' colspan="2"');
             if (jsonData.alphaess_mode_column) {
                 html += th('alphaess_mode', 'AlphaESS mode');
+            }
+            if (jsonData.towel_schedule_column) {
+                html += th('towels', 'Towels');
             }
             html += th('limit', 'Limit %');
             html += showDebug ? th('pv', 'PV kWh (10%)') : th('pv', 'PV kWh');
@@ -6887,6 +6895,10 @@ def get_plan_renderer_js():
                     const alphaessTitle = row.alphaess_mode_title ? ` title="${escapeAttr(row.alphaess_mode_title)}"` : '';
                     html += `<td id=alphaess_mode ${cellStyle} bgcolor=${row.alphaess_mode_color || '#FFFFFF'}${alphaessTitle}>${row.alphaess_mode || ''}</td>`;
                 }
+                if (jsonData.towel_schedule_column) {
+                    const towelTitle = row.towel_schedule_title ? ` title="${escapeAttr(row.towel_schedule_title)}"` : '';
+                    html += `<td id=towel_schedule ${cellStyle} bgcolor=${row.towel_schedule_color || '#FFFFFF'}${towelTitle}>${row.towel_schedule || ''}</td>`;
+                }
 
                 // Limit cell (with rowspan handling)
                 if (!row.skip_limit_cell) {
@@ -6992,6 +7004,9 @@ def get_plan_renderer_js():
                 // Empty cells for Time, Import, Export, State (colspan 2), optional AlphaESS mode, Limit %
                 html += '<td></td><td></td><td></td><td></td><td></td>';
                 if (jsonData.alphaess_mode_column) {
+                    html += '<td></td>';
+                }
+                if (jsonData.towel_schedule_column) {
                     html += '<td></td>';
                 }
                 html += '<td></td>';
@@ -7144,8 +7159,10 @@ def get_plan_renderer_js():
         });
         // A split cell's first half is always a demand_before_export_* code paired with the export
         // reason as its second half - prefix "Then" (no comma) so the two read as one narrative
-        // instead of two disconnected sentences.
-        if (reasons.length === 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && reasons[0].code.indexOf('demand_before_export_') === 0) {
+        // instead of two disconnected sentences. Length is >= 2 rather than == 2 because a history
+        // slot that held more than one state appends a mixed_slot_states note after the pair, and
+        // that must not cost the narrative its "Then".
+        if (reasons.length >= 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && reasons[0].code.indexOf('demand_before_export_') === 0) {
             rendered[1] = 'Then ' + rendered[1].charAt(0).toLowerCase() + rendered[1].slice(1);
         }
         return rendered.filter(Boolean).join(' ');
@@ -7288,21 +7305,28 @@ def get_plan_renderer_js():
         return html;
     }
 
-    // Render SOC cell with dropdown for manual SOC targets
+    // Render SOC cell with dropdown for manual SOC targets (minimum floor and maximum ceiling)
     function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides, slotMinute) {
         const dropdownId = `dropdown_${dropdownCounter++}`;
         const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_soc.some(r => r.minutes === minutesFromMidnight);
+        const isOverrideMax = overrides.manual_soc_max.some(r => r.minutes === minutesFromMidnight);
 
         let html = `<td id=soc data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
-        html += `${socValue}${socSym}${isOverride ? ' &#8526;' : ''}`;
+        html += `${socValue}${socSym}${isOverride ? ' &#8526;' : ''}${isOverrideMax ? ' &#11015;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
-        html += '<label>Target SOC (%):</label>';
+        html += '<label>Minimum SOC (%):</label>';
         html += `<input type="number" id="soc_${dropdownId}" value="${socValue}" step="1" min="0" max="100">`;
         html += `<button onclick="handleSocOverride('${timeDisplay}', '${dropdownId}')">Set Target</button>`;
         if (isOverride) {
             html += `<a onclick="handleSocOverride('${timeDisplay}', null, true)">Clear</a>`;
+        }
+        html += '<label>Maximum SOC (%):</label>';
+        html += `<input type="number" id="socmax_${dropdownId}" value="${socValue}" step="1" min="0" max="100">`;
+        html += `<button onclick="handleSocOverride('${timeDisplay}', '${dropdownId}', false, true)">Set Max</button>`;
+        if (isOverrideMax) {
+            html += `<a onclick="handleSocOverride('${timeDisplay}', null, true, true)">Clear</a>`;
         }
         html += '</div></div></td>';
         return html;
@@ -8159,6 +8183,14 @@ function downloadLiveApps() {
         window.location.href = './debug_apps_live?masked=0';
     } else {
         window.location.href = './debug_apps_live?masked=1';
+    }
+}
+
+function downloadFileApps() {
+    if (confirm(`Download apps.yaml with real credentials?\\n\\nOK = full unmasked file\\nCancel = masked file (credentials redacted)`)) {
+        window.location.href = './debug_apps?masked=0';
+    } else {
+        window.location.href = './debug_apps?masked=1';
     }
 }
 

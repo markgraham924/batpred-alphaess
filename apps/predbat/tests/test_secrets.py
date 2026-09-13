@@ -12,6 +12,7 @@ import os
 import yaml
 import tempfile
 from hass import Hass
+from utils import load_apps_yaml
 
 
 def test_secrets_loading():
@@ -103,8 +104,118 @@ def test_secrets_loading():
     return False  # False = success in Predbat test framework
 
 
+def test_mask_secret_yaml_text():
+    """The apps.yaml file download is redacted without being rewritten.
+
+    /debug_apps serves the file as the user wrote it, and it sits next to the live download as
+    the file people attach to bug reports. Redacting the parsed args would hand back a
+    regenerated document with the comments stripped, so this redacts the text instead: comments,
+    ordering and quoting survive, credential values do not.
+
+    Mutation check: dropping the TaggedScalar guard redacts '!secret' references too, and
+    removing the is_secret_key() call leaves every credential in place - both fail below.
+    """
+    from utils import mask_secret_yaml_text
+
+    failed = False
+    print("**** Testing apps.yaml text redaction ****")
+
+    source = """# My Predbat config
+pred_bat:
+  # Octopus settings
+  octopus_api_key: 'REAL-OCTOPUS-KEY'
+  octopus_api_account: A-REAL-ACCOUNT
+  ha_key: !secret ha_token
+  battery_size: 9.5
+  solis_inverter_sn: SN-VISIBLE
+  forecast_solar:
+    - postcode: SW1A 1AA
+      api_key: REAL-NESTED-KEY
+"""
+    masked = mask_secret_yaml_text(source)
+
+    for secret in ("REAL-OCTOPUS-KEY", "A-REAL-ACCOUNT", "REAL-NESTED-KEY"):
+        if secret in masked:
+            print("ERROR: {} survived text redaction:\n{}".format(secret, masked))
+            failed = True
+
+    # A '!secret' reference names a credential, it does not contain one - and which secret a key
+    # resolves to is exactly what you need when an integration will not authenticate.
+    if "!secret ha_token" not in masked:
+        print("ERROR: a '!secret' reference was redacted or rewritten:\n{}".format(masked))
+        failed = True
+
+    # The point of redacting the text rather than the args: it still reads like their own file.
+    if "# My Predbat config" not in masked or "# Octopus settings" not in masked:
+        print("ERROR: comments were lost, so the download no longer matches the user's file:\n{}".format(masked))
+        failed = True
+
+    if "9.5" not in masked or "SN-VISIBLE" not in masked or "SW1A 1AA" not in masked:
+        print("ERROR: redaction damaged values that must stay readable:\n{}".format(masked))
+        failed = True
+
+    # Unparseable input must raise, so the route fails closed rather than serving raw text.
+    try:
+        mask_secret_yaml_text("pred_bat:\n  key: [unclosed\n")
+        print("ERROR: invalid YAML was accepted instead of raising, so the route could serve it unredacted")
+        failed = True
+    except Exception:
+        pass
+
+    if not failed:
+        print("**** test_mask_secret_yaml_text PASSED ****")
+    return failed
+
+
 def run_secrets_tests(my_predbat=None):
     """
     Run all secrets tests
     """
-    return test_secrets_loading()
+    failed = test_secrets_loading()
+    failed |= test_mask_secret_yaml_text()
+    failed |= test_load_apps_yaml_resolves_secrets()
+    return failed
+
+
+def test_load_apps_yaml_resolves_secrets():
+    """
+    Test load_apps_yaml reads a given apps.yaml and resolves its !secret references
+
+    fox.py's --config option loads credentials through this rather than carrying its own parser,
+    so !secret keeps working for a standalone CLI run exactly as it does for Predbat itself.
+    """
+    print("**** Running test_load_apps_yaml_resolves_secrets ****")
+    failed = False
+
+    saved_secrets_env = os.environ.get("PREDBAT_SECRETS_FILE")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        secrets_path = os.path.join(tmpdir, "secrets.yaml")
+        with open(secrets_path, "w") as handle:
+            yaml.dump({"fox_api_key": "secret-fox-key"}, handle)
+
+        apps_path = os.path.join(tmpdir, "apps.yaml")
+        with open(apps_path, "w") as handle:
+            handle.write("pred_bat:\n  fox_key: !secret fox_api_key\n  fox_automatic: True\n  num_inverters: 1\n")
+
+        os.environ["PREDBAT_SECRETS_FILE"] = secrets_path
+        try:
+            args, secrets = load_apps_yaml(apps_path)
+        finally:
+            if saved_secrets_env is None:
+                os.environ.pop("PREDBAT_SECRETS_FILE", None)
+            else:
+                os.environ["PREDBAT_SECRETS_FILE"] = saved_secrets_env
+
+    if args.get("fox_key") != "secret-fox-key":
+        print("ERROR: expected the !secret reference to resolve, got {}".format(args.get("fox_key")))
+        failed = True
+    if args.get("fox_automatic") is not True:
+        print("ERROR: expected fox_automatic True, got {}".format(args.get("fox_automatic")))
+        failed = True
+    if secrets.get("fox_api_key") != "secret-fox-key":
+        print("ERROR: expected the secrets dict to be returned, got {}".format(secrets))
+        failed = True
+
+    if not failed:
+        print("**** test_load_apps_yaml_resolves_secrets PASSED ****")
+    return failed

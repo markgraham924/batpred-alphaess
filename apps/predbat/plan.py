@@ -20,13 +20,101 @@ call to the C++ prediction kernel, which is where the threading now lives.
 
 from datetime import datetime, timedelta
 from multiprocessing import cpu_count
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import CLOUD_FACTOR_PV10, CLOUD_WINDOW_MINUTES, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
 
 from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
 from prediction import Prediction
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
 import time
+import math
+
+
+def terminal_energy_credit(soc, reserve, capacity, steps, price=25.0, efficiency=0.9312, wear=2.0):
+    """Value useful stored energy over a bounded uncertain day, not fictitious sales.
+
+    Steps are forecast AC load/PV kWh. A 25% extra-2kWh scenario is insurance,
+    not certain demand. Later-half value is discounted 10%. No future exports
+    or grid recharge are credited, and future discharge wear is deducted.
+    """
+    if not steps or not 0 < efficiency <= 1 or not 0 <= reserve <= capacity:
+        raise ValueError("Invalid terminal valuation inputs")
+    if any(not math.isfinite(v) or v < 0 for pair in steps for v in pair):
+        raise ValueError("Invalid terminal load/PV forecast")
+    price = min(25.0, max(0.0, price))
+
+    def expense(initial, extra):
+        """Compute an identical continuation for each starting energy level."""
+        energy, cost = initial, 0.0
+        for i, (load, pv) in enumerate(steps):
+            net = load + extra / len(steps) - pv
+            rate = price * (1 if i < len(steps) // 2 else 0.9)
+            if net > 0:
+                used = min(max(energy - reserve, 0), net / efficiency)
+                energy -= used
+                cost += (net - used * efficiency) * rate + used * wear
+            else:
+                stored = min(capacity - energy, -net * efficiency)
+                energy += stored
+        return cost
+
+    soc = min(capacity, max(reserve, soc))
+    return max(0.0, sum(weight * (expense(reserve, extra) - expense(soc, extra)) for extra, weight in ((0, 0.75), (2, 0.25))))
+
+
+def prepare_terminal_curve(p):
+    """Cache a half-kWh useful-energy curve once per plan timestamp; fail to legacy.
+
+    Only raw energy forecasts extend past price coverage. Price estimates never
+    enter the tariff arrays. Missing energy data retains the old reserve policy.
+    """
+    key = (getattr(p, "minutes_now", None), getattr(p, "optimise_price_boundary", None))
+    if getattr(p, "_terminal_curve_key", None) == key:
+        return getattr(p, "_terminal_curve", None)
+    p._terminal_curve_key, p._terminal_curve = key, None
+    if not hasattr(p, "step_data_history"):
+        return None
+    original = p.forecast_minutes
+    try:
+        boundary = p.optimise_price_boundary - p.minutes_now
+        p.forecast_minutes = boundary + 1440
+        load = p.step_data_history(
+            p.load_minutes,
+            p.minutes_now,
+            forward=False,
+            scale_today=p.load_inday_adjustment,
+            scale_fixed=p.load_scaling,
+            type_load=True,
+            load_forecast=p.load_forecast,
+            load_scaling_dynamic=p.load_scaling_dynamic,
+            load_adjust=p.manual_load_adjust,
+            load_baseline=p.dynamic_load_baseline,
+        )
+        steps = []
+        for m in range(boundary, boundary + 1440, 5):
+            absolute = m + p.minutes_now
+            if m not in load or any(t not in p.pv_forecast_minute for t in range(absolute, absolute + 5)):
+                raise ValueError("Incomplete continuation energy forecast")
+            steps.append((load[m], sum(p.pv_forecast_minute[t] for t in range(absolute, absolute + 5)) * p.inverter_loss))
+        curve = []
+        for i in range(33):
+            soc = p.reserve + (p.soc_max - p.reserve) * i / 32
+            curve.append(terminal_energy_credit(soc, p.reserve, p.soc_max, steps, efficiency=p.inverter_loss * p.battery_loss_discharge, wear=p.metric_battery_cycle))
+        p._terminal_curve = curve
+        p.log("Optimise terminal useful-energy value: provisional 25p cap, 24h energy bridge, 25% extra-2kWh scenario; full-battery credit {}p; not published prices".format(dp2(curve[-1])))
+    except (ValueError, KeyError, AttributeError, TypeError) as error:
+        p.log("Optimise terminal value unavailable; retaining legacy reserve policy: {}".format(type(error).__name__))
+    finally:
+        p.forecast_minutes = original
+    return p._terminal_curve
+
+
+def lookup_terminal_credit(p, soc, curve):
+    """Interpolate credit without changing physical reserve or dispatch limits."""
+    position = min(32.0, max(0.0, (soc - p.reserve) / max(0.001, p.soc_max - p.reserve) * 32))
+    index = min(31, int(position))
+    return curve[index] + (curve[index + 1] - curve[index]) * (position - index)
+
 
 # How many windows the post-settle plan pass revisits when calculate_second_pass is off. The near-term
 # windows are the ones about to be executed, so a small budget keeps the common path cheap; raising it
@@ -965,6 +1053,8 @@ class Plan:
         """
         Limit the forecast length to either the total forecast duration or the start of the last window that falls outside the forecast
         """
+        if getattr(self, "optimise_price_boundary", None) is not None:
+            return self.forecast_minutes
         next_charge_start = self.forecast_minutes + self.minutes_now
         if charge_window:
             for window_n in range(len(charge_window)):
@@ -1354,6 +1444,8 @@ class Plan:
         curr = self.currency_symbols[1]
 
         plan_start_time = time.time()
+        if self.apply_optimise_price_boundary():
+            recompute = True
 
         # Re-compute plan due to time wrap
         if self.plan_last_updated_minutes > self.minutes_now:
@@ -1497,10 +1589,32 @@ class Plan:
             load_adjust=self.manual_load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
-        pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
-        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None, flip=True)
+        # The p90 refresh has to happen before the p50 series is stepped, not after it: the envelope
+        # model modulates p50 toward p90, so a stale or missing p90 would silently pick the
+        # amplitude for the central scenario.
         self.refresh_pv_forecast_minute90()
-        pv_forecast_minute90_step = self.step_data_history(self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
+
+        # Each scenario reaches for the next percentile up - p10 toward p50, p50 toward p90 - and
+        # p90 toward an extrapolation of its own band, capped at what the array can produce. The
+        # duty cycle comes from the band's asymmetry so peaks and troughs reach both edges at once;
+        # p10 takes the complementary duty with flip, so it lowers exactly where p50 raises.
+        cloud_duty = self.get_cloud_duty(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90) if self.metric_cloud_coverage else None
+        if cloud_duty:
+            n_up, n_down = cloud_duty
+            self.log("PV cloud model: envelope, {} of every {} steps raised per {} minute window".format(n_up, n_up + n_down, CLOUD_WINDOW_MINUTES))
+            pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_ceiling=self.pv_forecast_minute90, cloud_duty=cloud_duty)
+            pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_ceiling=self.pv_forecast_minute, cloud_duty=(n_down, n_up), flip=True)
+            pv_forecast_minute90_step = self.step_data_history(
+                self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_ceiling=self.get_pv90_cloud_ceiling(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute90), cloud_duty=cloud_duty
+            )
+        else:
+            # No usable p90 band (a forecast source that publishes none falls back to a copy of the
+            # p50), so keep the legacy proportional model rather than losing the cloud model.
+            if self.metric_cloud_coverage:
+                self.log("PV cloud model: proportional fallback, no PV90 data to modulate toward - check your solar forecast source publishes a PV90 estimate (pv_estimate90)")
+            pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
+            pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + CLOUD_FACTOR_PV10, 1.0) if self.metric_cloud_coverage else None, flip=True)
+            pv_forecast_minute90_step = self.step_data_history(self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
 
         # Save step data for debug
         self.load_minutes_step = load_minutes_step
@@ -1797,6 +1911,49 @@ class Plan:
         # Return if we recomputed or not
         return recompute
 
+    def apply_optimise_price_boundary(self):
+        """Bound Optimise planning to contiguous published prices, not fallback economics.
+
+        Config fetching restores forecast_minutes before each run. Keep historical rate
+        dictionaries intact for accounting, but rebuild economic scans/windows from only
+        the usable future. A missing current interval invalidates planning rather than
+        authorising dispatch against invented prices.
+        """
+        previous = getattr(self, "optimise_price_boundary", None)
+        self.optimise_price_boundary = None
+        self.optimise_terminal_reserve = 0.0
+        source = self.get_arg("metric_octopus_import", None, indirect=False)
+        tariff = self.get_state_wrapper(source, attribute="tariff_code", default="") if isinstance(source, str) else ""
+        if "NEXT_OPTIMISE" not in str(tariff).upper():
+            return previous is not None
+        start = self.minutes_now
+        end = start + self.forecast_minutes
+        import_quality = getattr(self, "rate_import_replicated", {})
+        export_quality = getattr(self, "rate_export_replicated", {})
+        boundary = next((m for m in range(start, end) if m not in self.rate_import or m not in self.rate_export or import_quality.get(m) == "unknown" or export_quality.get(m) == "unknown"), end)
+        duration = (boundary - start) // PREDICT_STEP * PREDICT_STEP
+        if duration < PREDICT_STEP:
+            self.plan_valid = False
+            self.record_status("Error: Optimise has no complete current price interval; no new plan", had_errors=True)
+            raise ValueError("Optimise published-price horizon is empty")
+        self.forecast_minutes = duration
+        self.optimise_price_boundary = start + duration
+        self.optimise_terminal_reserve = min(self.soc_max, max(self.reserve, self.best_soc_keep, self.soc_max * 0.20))
+        # Discard any incumbent evaluated against the old horizon or placeholder rates.
+        self.plan_valid = False
+        imports = {m: r for m, r in self.rate_import.items() if start <= m < start + duration}
+        exports = {m: r for m, r in self.rate_export.items() if start <= m < start + duration}
+        self.rate_scan(imports, print=False)
+        self.rate_scan_export(exports, print=False)
+        self.rate_min_base, self.rate_max_base = self.rate_min, self.rate_max
+        self.set_rate_thresholds()
+        self.low_rates, _, _ = self.rate_scan_window(imports, 5, self.rate_import_cost_threshold, False, alt_rates=exports, pv_light_dark=self.calc_pv_light_dark())
+        self.high_export_rates, _, _ = self.rate_scan_window(exports, 5, self.rate_export_cost_threshold, True, alt_rates=imports)
+        for windows in (self.low_rates, self.high_export_rates):
+            windows[:] = [dict(w, end=min(w["end"], start + duration)) for w in windows if w["start"] < start + duration and w["end"] > start]
+        self.log("Optimise published-price boundary {}: {} minutes, terminal reserve target {} kWh (20% or existing reserve); unknown prices excluded".format(self.time_abs_str(start + duration), duration, dp2(self.optimise_terminal_reserve)))
+        return True
+
     def battery_value_rate(self, minute):
         """
         Forward value of one kWh left in the battery at the given absolute minute, in p/kWh
@@ -1866,6 +2023,26 @@ class Plan:
         if metric90 is not None:
             battery_value90 = ((soc90 or 0) * self.metric_battery_value_scaling + final_iboost90 * self.iboost_value_scaling) * value_rate
             metric90 -= battery_value90
+
+        if getattr(self, "optimise_price_boundary", None) is not None:
+            # No speculative resale/replacement credit beyond the published horizon.
+            # A shortfall-only soft penalty discourages end-of-plan depletion without
+            # rewarding extra charging above the reserve target. It is not a hard
+            # inverter floor: house demand may still use the battery if necessary.
+            target = self.optimise_terminal_reserve
+            penalty = max(100.0, max(self.rate_max, 0.0) * 2)
+            battery_value = -max(target - soc, 0.0) * penalty
+            metric = cost - battery_value
+            metric10 = cost10 + max(target - soc10, 0.0) * penalty
+            if metric90 is not None:
+                metric90 = cost90 + max(target - (soc90 or 0.0), 0.0) * penalty
+            curve = prepare_terminal_curve(self)
+            if curve is not None:
+                battery_value = lookup_terminal_credit(self, soc, curve)
+                metric = cost - battery_value
+                metric10 = cost10 - lookup_terminal_credit(self, soc10, curve)
+                if metric90 is not None:
+                    metric90 = cost90 - lookup_terminal_credit(self, soc90 or 0.0, curve)
 
         # Signed weighted average across the simulated scenarios. Unlike the previous downside-only
         # clamp this lets a better-than-nominal scenario pull the metric down, which is what gives
@@ -3108,6 +3285,8 @@ class Plan:
                     and (export_limits_best[window_n] == new_enable[-1])
                     and (export_window_best[window_n]["start"] not in self.manual_all_times)
                     and (new_best[-1]["start"] not in self.manual_all_times)
+                    and (export_window_best[window_n]["start"] not in self.all_active_keep_max)
+                    and (new_best[-1]["start"] not in self.all_active_keep_max)
                 ):
                     new_best[-1]["end"] = export_window_best[window_n]["end"]
                     new_best[-1]["target"] = export_window_best[window_n].get("target", export_limits_best[window_n])
@@ -4417,7 +4596,17 @@ class Plan:
                     else:
                         self.export_limits_best[window_n] = 0.0
                 elif self.export_window_best[window_n]["start"] in self.manual_freeze_export_times:
-                    self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
+                    if not self.set_export_freeze:
+                        # set_export_freeze is False either because execute.py forced it off for an
+                        # inverter whose INVERTER_DEF says support_discharge_freeze is False, or because
+                        # the user turned off the non-expert "Set Export Freeze" switch - but this
+                        # override wrote a freeze anyway, so the plan assumed a hold that will not
+                        # happen. Drop to demand rather than a forced export: the user asked to hold
+                        # the battery, and exporting it is the opposite of that request (GH#4892).
+                        self.log("Warn: Manual freeze export time {} dropped to demand as set_export_freeze is disabled (inverter capability or user setting)".format(self.time_abs_str(self.export_window_best[window_n]["start"])))
+                        self.export_limits_best[window_n] = EXPORT_LIMIT_IDLE
+                    else:
+                        self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
 
     def prefill_charge_limit_best(self):
         """
@@ -4801,6 +4990,14 @@ class Plan:
                         "soc_now": dp3(self.soc_kw),
                         "soc_max": dp3(self.soc_max),
                         "soc_now_percent": dp2(calc_percent_limit(self.soc_kw, self.soc_max)),
+                        # What this plan expects the battery to hold one and eight hours out. Recorded as
+                        # plain attributes so Home Assistant keeps them in history: results/today are
+                        # rewritten every cycle, so the forecast made for a given moment is gone by the
+                        # time that moment arrives and there is nothing left to score the plan against.
+                        # Read back with a matching time offset these sit alongside the measured SoC and
+                        # show whether the model tracks the hardware.
+                        "soc_h1": dp3(self.predict_soc_best.get(60, final_soc)),
+                        "soc_h8": dp3(self.predict_soc_best.get(60 * 8, final_soc)),
                     },
                 )
                 self.dashboard_item(
