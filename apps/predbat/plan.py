@@ -4733,6 +4733,13 @@ class Plan:
                 self.predict_metric_best = pred.predict_metric_best
                 self.predict_carbon_best = pred.predict_carbon_best
                 self.predict_clipped_best = pred.predict_clipped_best
+                if save == "best" and getattr(self, "optimise_price_boundary", None) == self.minutes_now + end_record and self.get_arg("optimise_context_enable", False) is True:
+                    # Keep the actual boundary state, not the start of the final
+                    # five-minute step, for the display-only forecast continuation.
+                    self.predict_soc_best = dict(self.predict_soc_best)
+                    self.predict_metric_best = dict(self.predict_metric_best)
+                    self.predict_soc_best[end_record] = final_soc
+                    self.predict_metric_best[end_record] = final_metric
 
             if save:
                 self.log(

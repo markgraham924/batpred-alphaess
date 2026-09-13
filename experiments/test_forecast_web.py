@@ -49,9 +49,24 @@ class ForecastWebTests(unittest.TestCase):
         assert.ok(!container.innerHTML.includes('forecastContext'));
         currentView = 'plan'; window.planData = {forecast_context: []}; refreshPlan();
         assert.ok(container.innerHTML.includes('No usable forecast'));
+        const simulation = {...data, rows: [], alphaess_mode_column: true, towel_schedule_column: true,
+            num_cars: 1, carbon_enable: true, currency_symbols: ['£', 'p'],
+            forecast_simulation: [{...row, mode: 'Force Chg', soc_start: 30, soc_end: 40, cost_p: 12, total_p: 250}]};
+        const extended = renderForecastSimulation(simulation, false);
+        assert.ok(extended.includes('Forecast simulation — not scheduled'));
+        assert.ok(extended.includes('30.00 → 40.00'));
+        assert.ok(extended.includes('2.50'));
+        assert.ok(extended.includes('Force Chg'));
+        assert.ok(!extended.includes('onclick'));
+        assert.ok(!extended.includes('dropdown'));
+        assert.equal(renderForecastContext(simulation, 'plan'), '');
+        assert.equal(renderForecastSimulation({rows: []}, false), '');
+        assert.ok(scriptMarker.includes('if (editable) html += renderForecastSimulation(jsonData, showDebug)'));
         console.log('Forecast web renderer checks passed');
         """
-        result = subprocess.run(["node"], input=script + checks, capture_output=True, text=True, encoding="utf-8")
+        import json
+
+        result = subprocess.run(["node"], input="const scriptMarker = " + json.dumps(script) + ";\n" + script + checks, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 

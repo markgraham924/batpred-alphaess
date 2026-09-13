@@ -7064,6 +7064,7 @@ def get_plan_renderer_js():
                 html += '</tr>';
             }
 
+            if (editable) html += renderForecastSimulation(jsonData, showDebug);
             html += '</table>';
             return html;
         } catch (error) {
@@ -7556,8 +7557,43 @@ def get_plan_renderer_js():
         refreshPlan();
     }
 
+    // Continue the same columns, but without any command or manual-override controls.
+    function renderForecastSimulation(data, showDebug) {
+        const rows = data.forecast_simulation;
+        if (!Array.isArray(rows) || !rows.length) return '';
+        const text = value => String(value ?? '').replace(/[&<>"']/g, char =>
+            ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
+        const number = value => typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : '—';
+        const extra = showDebug && data.rows.some(row => row.extra_load !== undefined);
+        const count = 11 + Number(!!data.alphaess_mode_column) + Number(!!data.towel_schedule_column) + Number(!!showDebug) + Number(!!extra)
+            + Number(data.num_cars > 0) + Number(!!data.iboost_enable) + (data.carbon_enable ? 2 : 0);
+        let html = `<tr id="forecastSimulation"><td colspan="${count}" style="border-top:3px solid #b58900;padding:12px;white-space:normal">`;
+        html += '<b>Forecast simulation — not scheduled</b><br>Indicative prices and battery actions; only confirmed-price slots can control the inverter. ';
+        html += text(data.forecast_context_status) + '<br>SoC shows start → end; costs continue from the main plan. Future car/towel runs are not assumed.</td></tr>';
+        for (const row of rows) {
+            html += '<tr style="border-left:3px solid #b58900">';
+            html += `<td title="${text(row.start)}">${text(formatTimeDisplay(row.start))}</td>`;
+            html += `<td title="Forecast: ${text(row.band)}">≈${number(row.import)}</td><td>≈${number(row.export)}</td>`;
+            html += `<td colspan="2">${text(row.mode)} · ${text(row.band)}</td>`;
+            if (data.alphaess_mode_column) html += `<td>${text(row.mode)} (forecast)</td>`;
+            if (data.towel_schedule_column) html += '<td>—</td>';
+            html += `<td>${row.mode === 'Force Chg' || row.mode === 'Force Exp' ? number(row.soc_end) : '—'}</td>`;
+            html += `<td>${number(row.pv)}</td><td>${number(row.load)}</td>`;
+            if (showDebug) html += '<td>—</td>';
+            if (extra) html += '<td>—</td>';
+            if (data.num_cars > 0) html += '<td>—</td>';
+            if (data.iboost_enable) html += '<td>—</td>';
+            html += `<td>${number(row.soc_start)} → ${number(row.soc_end)}</td><td>≈${number(row.cost_p)} p</td>`;
+            html += `<td>≈${text(data.currency_symbols?.[0] ?? '£')}${number(row.total_p / 100)}</td>`;
+            if (data.carbon_enable) html += '<td>—</td><td>—</td>';
+            html += '</tr>';
+        }
+        return html;
+    }
+
     // Forecast context is informational, never an executable schedule.
     function renderForecastContext(data, view) {
+        if (Array.isArray(data.forecast_simulation) && data.forecast_simulation.length) return '';
         if (view !== 'plan' || !Array.isArray(data.forecast_context)) return '';
         const escapeText = value => String(value ?? '').replace(/[&<>"']/g, char =>
             ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));

@@ -2046,6 +2046,16 @@ class Output:
 
             html += context_html(getattr(self, "price_context_rows", []), getattr(self, "price_context_status", "Not yet evaluated"))
             raw_plan["forecast_context"] = getattr(self, "price_context_rows", [])
+            from forecast_dispatch import publish_continuation
+
+            boundary = getattr(self, "optimise_price_boundary", None)
+            if boundary is not None:
+                boundary_relative = boundary - self.minutes_now
+                boundary_soc = self.predict_soc_best.get(boundary_relative)
+                boundary_cost = self.predict_metric_best.get(boundary_relative)
+                if boundary_soc is not None and boundary_cost is not None:
+                    raw_plan["forecast_simulation"] = publish_continuation(self, boundary_soc, boundary_cost)
+            raw_plan["forecast_context_status"] = getattr(self, "price_context_status", "Forecast unavailable")
         html = html.replace("£", "&#163;")
 
         # Json end of plan costs

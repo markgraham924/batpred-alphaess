@@ -84,6 +84,7 @@ def prepare_context(p):
         return p._price_context_curve
     p._price_context_ready = True
     p._price_context_curve = None
+    p._price_context_model = None
     p.price_context_rows = []
     p.price_context_status = "Forecast unavailable or expired; existing battery valuation retained"
     original = p.forecast_minutes
@@ -95,18 +96,9 @@ def prepare_context(p):
         if not rows:
             raise ValueError("No contiguous forecast")
         p.forecast_minutes = p.optimise_price_boundary - p.minutes_now + sum(row["minutes"] for row in rows)
-        loads = p.step_data_history(
-            p.load_minutes,
-            p.minutes_now,
-            forward=False,
-            scale_today=p.load_inday_adjustment,
-            scale_fixed=p.load_scaling,
-            type_load=True,
-            load_forecast=p.load_forecast,
-            load_scaling_dynamic=p.load_scaling_dynamic,
-            load_adjust=p.manual_load_adjust,
-            load_baseline=p.dynamic_load_baseline,
-        )
+        from forecast_dispatch import build_model, continuation_load
+
+        loads = {minute: continuation_load(p, minute) for minute in range(0, p.forecast_minutes, 5)}
         usable = []
         absolute = p.optimise_price_boundary
         for row in rows:
@@ -120,17 +112,23 @@ def prepare_context(p):
             absolute += duration
         if not usable:
             raise ValueError("No energy coverage")
-        p._price_context_curve = context_curve(
-            usable,
-            p.reserve,
-            p.soc_max,
+        parameters = dict(
+            reserve=p.reserve,
+            capacity=p.soc_max,
             charge_kw=min(3.68, p.battery_rate_max_charge * 60),
             discharge_kw=min(3.68, p.battery_rate_max_discharge * 60),
             efficiency=min(p.inverter_loss * p.battery_loss, p.inverter_loss * p.battery_loss_discharge),
             wear=p.metric_battery_cycle,
+            inverter_kw=p.inverter_limit * 60,
+            export_kw=p.export_limit * 60,
         )
+        nominal = build_model(usable, **parameters)
+        duration = sum(row["minutes"] for row in usable)
+        downside = build_model([dict(row, pv=row["pv"] * 0.7, load=row["load"] + 2 * row["minutes"] / duration) for row in usable], **parameters)
+        p._price_context_model = nominal
+        p._price_context_curve = [0.75 * base + 0.25 * cautious for base, cautious in zip(nominal["curve"], downside["curve"])]
         p.price_context_rows = [dict(row, start=row["start"].isoformat(), end=row["end"].isoformat()) for row in usable]
-        p.price_context_status = "Indicative Optimise context; not scheduled; no value beyond final row"
+        p.price_context_status = "Forecast simulation; not scheduled. Valuation: 75% nominal, 25% lower solar (-30%) and +2kWh demand. No value beyond final row."
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as error:
         p.log("Price context unavailable: {}".format(type(error).__name__))
     finally:
