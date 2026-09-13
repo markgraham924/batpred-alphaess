@@ -2767,6 +2767,8 @@ APPS_SCHEMA = {
     "sunsynk_automatic_ignore_pv": {"type": "boolean"},
     "sunsynk_control_enable": {"type": "boolean"},
     "sunsynk_battery_nominal_voltage": {"type": "float"},
+    "optimise_context_enable": {"type": "boolean"},
+    "optimise_context_source": {"type": "string"},
     "alphaess_app_id": {"type": "string", "empty": False},
     "alphaess_app_secret": {"type": "string", "empty": False},
     "alphaess_inverter_sn": {"type": "string|string_list", "empty": False},

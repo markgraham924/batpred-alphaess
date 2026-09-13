@@ -28,6 +28,7 @@ from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
 import time
 import math
+from price_context import prepare_context
 
 
 def terminal_energy_credit(soc, reserve, capacity, steps, price=25.0, efficiency=0.9312, wear=2.0):
@@ -68,6 +69,10 @@ def prepare_terminal_curve(p):
     Only raw energy forecasts extend past price coverage. Price estimates never
     enter the tariff arrays. Missing energy data retains the old reserve policy.
     """
+    if hasattr(p, "get_arg") and p.get_arg("optimise_context_enable", False) is True:
+        context = prepare_context(p)
+        if context is not None:
+            return context
     key = (getattr(p, "minutes_now", None), getattr(p, "optimise_price_boundary", None))
     if getattr(p, "_terminal_curve_key", None) == key:
         return getattr(p, "_terminal_curve", None)
@@ -1920,6 +1925,8 @@ class Plan:
         authorising dispatch against invented prices.
         """
         previous = getattr(self, "optimise_price_boundary", None)
+        self._price_context_ready = False
+        self.price_context_rows = []
         self.optimise_price_boundary = None
         self.optimise_terminal_reserve = 0.0
         source = self.get_arg("metric_octopus_import", None, indirect=False)
@@ -1928,6 +1935,8 @@ class Plan:
             return previous is not None
         start = self.minutes_now
         end = start + self.forecast_minutes
+        if self.get_arg("optimise_context_enable", False) is True:
+            end = min(end, start + 1440)
         import_quality = getattr(self, "rate_import_replicated", {})
         export_quality = getattr(self, "rate_export_replicated", {})
         boundary = next((m for m in range(start, end) if m not in self.rate_import or m not in self.rate_export or import_quality.get(m) == "unknown" or export_quality.get(m) == "unknown"), end)

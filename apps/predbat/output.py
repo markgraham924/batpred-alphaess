@@ -2041,6 +2041,11 @@ class Output:
             html += "<td></td><td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(carbon_amount_end / 1000.0))
         html += "</tr>\n"
         html += "</table>"
+        if publish and self.get_arg("optimise_context_enable", False) is True:
+            from price_context import context_html
+
+            html += context_html(getattr(self, "price_context_rows", []), getattr(self, "price_context_status", "Not yet evaluated"))
+            raw_plan["forecast_context"] = getattr(self, "price_context_rows", [])
         html = html.replace("£", "&#163;")
 
         # Json end of plan costs
