@@ -7556,6 +7556,28 @@ def get_plan_renderer_js():
         refreshPlan();
     }
 
+    // Forecast context is informational, never an executable schedule.
+    function renderForecastContext(data, view) {
+        if (view !== 'plan' || !Array.isArray(data.forecast_context)) return '';
+        const escapeText = value => String(value ?? '').replace(/[&<>"']/g, char =>
+            ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
+        const numberText = value => typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : '—';
+        let html = '<section id="forecastContext"><h2>Forecast context — not scheduled</h2>';
+        html += '<p>Indicative prices beyond the actionable plan. These rows provide planning context, not charge or export commands.</p>';
+        if (!data.forecast_context.length) {
+            return html + '<p>No usable forecast context is currently available; existing battery valuation is retained.</p></section>';
+        }
+        html += '<div style="overflow-x:auto"><table><thead><tr><th>Time (with UTC offset)</th><th>Band</th>';
+        html += '<th>Indicative import p/kWh</th><th>Indicative export p/kWh</th><th>Load kWh</th><th>PV kWh</th></tr></thead><tbody>';
+        for (const row of data.forecast_context) {
+            if (!row || typeof row !== 'object') continue;
+            html += '<tr><td>' + escapeText(row.start) + '</td><td>' + escapeText(row.band) + '</td>';
+            for (const key of ['import', 'export', 'load', 'pv']) html += '<td>' + numberText(row[key]) + '</td>';
+            html += '</tr>';
+        }
+        return html + '</tbody></table></div></section>';
+    }
+
     // Refresh plan display
     function refreshPlan() {
         const container = document.getElementById('planContainer');
@@ -7605,6 +7627,7 @@ def get_plan_renderer_js():
         // future predictions with no corresponding capture.
         const showHistoryLinks = (currentView === 'yesterday');
         container.innerHTML = renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
+        container.innerHTML += renderForecastContext(data, currentView);
 
         // Apply dark mode colors if needed
         updateTableColors();
