@@ -7006,7 +7006,7 @@ def get_plan_renderer_js():
                 const totals = {...jsonData.totals};
                 if (forecastRows.length) {
                     const last = jsonData.forecast_simulation[jsonData.forecast_simulation.length - 1];
-                    totals.total_cost = (last.total_p + last.cost_p) / 100;
+                    totals.total_cost = ((last.total_p + last.cost_p) / 100).toFixed(2);
                     totals.soc_percent = Math.round(last.soc_end);
                     totals.pv_forecast = Number(((totals.pv_forecast || 0) + jsonData.forecast_simulation.reduce((sum, row) => sum + row.pv, 0)).toFixed(2));
                     totals.load_forecast = Number(((totals.load_forecast || 0) + jsonData.forecast_simulation.reduce((sum, row) => sum + row.load, 0)).toFixed(2));

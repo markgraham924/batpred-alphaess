@@ -51,7 +51,7 @@ class ForecastWebTests(unittest.TestCase):
         currentView = 'plan'; window.planData = {forecast_context: []}; refreshPlan();
         assert.ok(container.innerHTML.includes('No usable forecast'));
         const simulation = {...data, rows: [], alphaess_mode_column: true, towel_schedule_column: true,
-            num_cars: 1, carbon_enable: true, currency_symbols: ['£', 'p'],
+            num_cars: 1, carbon_enable: true, currency_symbols: ['£', 'p'], totals: {},
             forecast_simulation: [{...row, mode: 'Force Chg', soc_start: 30, soc_end: 40, cost_p: 12, total_p: 250}]};
         document.createElement = () => ({textContent: '', get innerHTML() {return this.textContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');}});
         const extended = actualRender(simulation, {}, false, true, false);
@@ -61,6 +61,7 @@ class ForecastWebTests(unittest.TestCase):
         assert.ok(extended.includes('id=soc'));
         assert.ok(extended.includes('>30'));
         assert.ok(extended.includes('2.50'));
+        assert.ok(extended.includes('£2.62</b>'), extended);
         assert.ok(extended.includes('Force Chg'));
         assert.ok(!extended.includes('onclick'));
         assert.ok(!extended.includes('dropdown'));
