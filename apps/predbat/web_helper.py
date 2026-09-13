@@ -6732,6 +6732,9 @@ def get_plan_renderer_js():
             // the History/Yesterday views publish their own copy alongside their own rows.
             const reasonTemplates = jsonData.reason_templates;
 
+            const forecastRows = editable ? forecastPlanRows(jsonData) : [];
+            const displayRows = [...jsonData.rows, ...forecastRows];
+
             let html = '<table>';
             const cellStyle = 'style="padding: 4px;"';
 
@@ -6807,13 +6810,15 @@ def get_plan_renderer_js():
             html += '</tr>';
 
             // Render rows
-            for (let i = 0; i < jsonData.rows.length; i++) {
-                const row = jsonData.rows[i];
-                html += '<tr style="color:black">';
+            for (let i = 0; i < displayRows.length; i++) {
+                const row = displayRows[i];
+                const rowEditable = editable && !row.forecast_only;
+                const forecastAttrs = row.forecast_only ? ' data-forecast="true" title="Estimated prices; this plan will change as new information arrives."' : '';
+                html += `<tr style="color:black"${forecastAttrs}>`;
 
                 // Time cell with dropdown (if editable)
                 const timeDisplay = formatTimeDisplay(row.time);
-                if (editable) {
+                if (rowEditable) {
                     html += renderTimeCell(row.time, timeDisplay, overrides, row.slot_minute);
                 } else {
                     html += `<td id=time bgcolor=#FFFFFF>${timeDisplay}</td>`;
@@ -6840,7 +6845,7 @@ def get_plan_renderer_js():
                 if (importBold) {
                     importText = `<b>${importText}</b>`;
                 }
-                if (editable) {
+                if (rowEditable) {
                     html += renderRateCell(row.import_rate, row.rate_color_import, 'import', row.time, timeDisplay, overrides, importText, row.slot_minute);
                 } else if (row.rate_split) {
                     // Car's own rate has diverged from the house rate - not necessarily an IOG cap
@@ -6868,7 +6873,7 @@ def get_plan_renderer_js():
                 if (exportAdjustType) {
                     exportText = `<i>${exportText}${exportAdjust}</i>`;
                 }
-                if (editable) {
+                if (rowEditable) {
                     html += renderRateCell(row.export_rate, row.rate_color_export, 'export', row.time, timeDisplay, overrides, exportText, row.slot_minute);
                 } else {
                     html += `<td id=export ${cellStyle} bgcolor=${row.rate_color_export || '#FFFFFF'}>${exportText}</td>`;
@@ -6876,7 +6881,7 @@ def get_plan_renderer_js():
 
                 // State cells (with rowspan and split handling)
                 if (!row.skip_state_cell) {
-                    if (editable) {
+                    if (rowEditable) {
                         html += renderStateCell(row, timeDisplay, overrides, reasonTemplates);
                     } else {
                         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
@@ -6917,7 +6922,7 @@ def get_plan_renderer_js():
                 html += `<td id=pv bgcolor=${row.pv_color || '#FFFFFF'}>${pvText}</td>`;
 
                 // Load forecast (with 10% value in brackets if debug mode)
-                if (editable) {
+                if (rowEditable) {
                     html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5, row.slot_minute);
                 } else {
                     let loadText = row.load_forecast !== undefined ? row.load_forecast : '';
@@ -6953,7 +6958,7 @@ def get_plan_renderer_js():
 
                 // SOC
                 const socSym = row.soc_sym || (row.soc_change > 0 ? '&nearr;' : (row.soc_change < 0 ? '&searr;' : '&rarr;'));
-                if (editable) {
+                if (rowEditable) {
                     html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides, row.slot_minute);
                 } else {
                     html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}>${row.soc_percent}${socSym}</td>`;
@@ -6998,7 +7003,15 @@ def get_plan_renderer_js():
 
             // Render totals row if available
             if (jsonData.totals) {
-                const totals = jsonData.totals;
+                const totals = {...jsonData.totals};
+                if (forecastRows.length) {
+                    const last = jsonData.forecast_simulation[jsonData.forecast_simulation.length - 1];
+                    totals.total_cost = (last.total_p + last.cost_p) / 100;
+                    totals.soc_percent = Math.round(last.soc_end);
+                    totals.pv_forecast = Number(((totals.pv_forecast || 0) + jsonData.forecast_simulation.reduce((sum, row) => sum + row.pv, 0)).toFixed(2));
+                    totals.load_forecast = Number(((totals.load_forecast || 0) + jsonData.forecast_simulation.reduce((sum, row) => sum + row.load, 0)).toFixed(2));
+                    totals.total_carbon = null;
+                }
                 html += '<tr style="color:black">';
 
                 // Empty cells for Time, Import, Export, State (colspan 2), optional AlphaESS mode, Limit %
@@ -7064,8 +7077,8 @@ def get_plan_renderer_js():
                 html += '</tr>';
             }
 
-            if (editable) html += renderForecastSimulation(jsonData, showDebug);
             html += '</table>';
+            if (forecastRows.length) html += '<style>tr[data-forecast] > td {background-image:linear-gradient(rgba(150,125,210,0.16),rgba(150,125,210,0.16));} tr[data-forecast] > td:first-child {border-left:3px solid #aa91cb;white-space:nowrap;}</style>';
             return html;
         } catch (error) {
             console.error('Error rendering plan:', error);
@@ -7557,39 +7570,31 @@ def get_plan_renderer_js():
         refreshPlan();
     }
 
-    // Continue the same columns, but without any command or manual-override controls.
-    function renderForecastSimulation(data, showDebug) {
-        const rows = data.forecast_simulation;
-        if (!Array.isArray(rows) || !rows.length) return '';
-        const text = value => String(value ?? '').replace(/[&<>"']/g, char =>
-            ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
-        const number = value => typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : '—';
-        const extra = showDebug && data.rows.some(row => row.extra_load !== undefined);
-        const count = 11 + Number(!!data.alphaess_mode_column) + Number(!!data.towel_schedule_column) + Number(!!showDebug) + Number(!!extra)
-            + Number(data.num_cars > 0) + Number(!!data.iboost_enable) + (data.carbon_enable ? 2 : 0);
-        let html = `<tr id="forecastSimulation"><td colspan="${count}" style="border-top:3px solid #b58900;padding:12px;white-space:normal">`;
-        html += '<b>Forecast simulation — not scheduled</b><br>Indicative prices and battery actions; only confirmed-price slots can control the inverter. ';
-        html += text(data.forecast_context_status) + '<br>SoC shows start → end; costs continue from the main plan. Future car/towel runs are not assumed.</td></tr>';
-        for (const row of rows) {
-            html += '<tr style="border-left:3px solid #b58900">';
-            html += `<td title="${text(row.start)}">${text(formatTimeDisplay(row.start))}</td>`;
-            html += `<td title="Forecast: ${text(row.band)}">≈${number(row.import)}</td><td>≈${number(row.export)}</td>`;
-            html += `<td colspan="2">${text(row.mode)} · ${text(row.band)}</td>`;
-            if (data.alphaess_mode_column) html += `<td>${text(row.mode)} (forecast)</td>`;
-            if (data.towel_schedule_column) html += '<td>—</td>';
-            html += `<td>${row.mode === 'Force Chg' || row.mode === 'Force Exp' ? number(row.soc_end) : '—'}</td>`;
-            html += `<td>${number(row.pv)}</td><td>${number(row.load)}</td>`;
-            if (showDebug) html += '<td>—</td>';
-            if (extra) html += '<td>—</td>';
-            if (data.num_cars > 0) html += '<td>—</td>';
-            if (data.iboost_enable) html += '<td>—</td>';
-            html += `<td>${number(row.soc_start)} → ${number(row.soc_end)}</td><td>≈${number(row.cost_p)} p</td>`;
-            html += `<td>≈${text(data.currency_symbols?.[0] ?? '£')}${number(row.total_p / 100)}</td>`;
-            if (data.carbon_enable) html += '<td>—</td><td>—</td>';
-            html += '</tr>';
-        }
-        return html;
+    // Adapt forecast results to the normal plan-row schema, not a second renderer.
+    function forecastPlanRows(data) {
+        if (!Array.isArray(data.forecast_simulation)) return [];
+        const number = value => Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
+        const states = {'Normal': ['Demand', '↗', '#FFFFFF'], 'Mode 19': ['FrzExp', 'FrzExp→', '#AAAAAA'],
+            'Force Chg': ['Chrg', 'Chrg↗', '#3AEE85'], 'Force Exp': ['Exp', 'Exp↘', '#FFFF00'], 'Hold': ['HoldChrg', 'Hold→', '#C0C0C0']};
+        return data.forecast_simulation.map(row => {
+            const mode = Object.hasOwn(states, row.mode) ? row.mode : 'Normal';
+            const [state, label, color] = states[mode];
+            return {forecast_only: true, time: row.start, import_rate: row.import, export_rate: row.export,
+                state, state_text: state === 'Demand' ? (row.soc_end >= row.soc_start ? '↗' : '↘') : label,
+                state_color: color, alphaess_mode: mode, alphaess_mode_color: color,
+                alphaess_mode_title: 'Modelled using estimated prices; not an issued command',
+                show_limit: mode === 'Force Chg' || mode === 'Force Exp' ? Math.round(row.soc_end) : '',
+                pv_forecast: number(row.pv), load_forecast: number(row.load),
+                pv_color: '#FFAAAA', load_color: '#FFFF00', soc_color: row.soc_start >= 50 ? '#3AEE85' : '#FFFF00',
+                rate_color_import: row.import <= data.import_cost_threshold ? '#3AEE85' : '#FFFF00',
+                rate_color_export: '#48deff', cost_color: row.cost_p < -0.5 ? '#00FF00' : row.cost_p > 0.5 ? '#FFAAAA' : '#FFFFFF',
+                soc_percent: Math.round(row.soc_start), soc_change: row.soc_end - row.soc_start,
+                cost_change: row.cost_p / 100, total_cost: row.total_p / 100,
+                extra_load: data.rows.some(value => value.extra_load !== undefined) ? '—' : undefined,
+                clipped: '—'};
+        });
     }
+
 
     // Forecast context is informational, never an executable schedule.
     function renderForecastContext(data, view) {

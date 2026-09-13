@@ -1251,6 +1251,9 @@ class Output:
         # Use plan_interval_minutes instead of hardcoded 30
         minute_now_align = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
         end_plan = min(end_record, self.forecast_minutes) + minute_now_align
+        forecast_join = publish and self.get_arg("optimise_context_enable", False) is True and getattr(self, "optimise_price_boundary", None) == self.minutes_now + min(end_record, self.forecast_minutes)
+        if forecast_join:
+            end_plan = self.optimise_price_boundary
         rowspan = 0
         in_span = False
         start_span = False
@@ -1308,6 +1311,9 @@ class Output:
             minute_relative_end = minute_relative + self.plan_interval_minutes
             minute_end = minute_relative_end + self.minutes_now
             minute_relative_slot_end = min(minute_relative_end, self.forecast_minutes - PREDICT_STEP)
+            if forecast_join:
+                minute_relative_slot_end = min(minute_relative_end, end_plan - self.minutes_now)
+                minute_end = min(minute_end, end_plan)
 
             minute_timestamp = self.midnight_utc + timedelta(minutes=(minute_relative_start + self.minutes_now))
 
