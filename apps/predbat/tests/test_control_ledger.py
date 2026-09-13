@@ -1622,17 +1622,17 @@ def test_begin_cycle_precedes_every_inverter_read():
     import os
 
     source = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "predbat.py")).read()
-    begins = [i for i in range(len(source)) if source.startswith("self.control_ledger.begin_cycle()", i)]
-    fetches = [i for i in range(len(source)) if source.startswith("self.fetch_inverter_data()", i)]
-    if len(begins) != 1:
-        print(f"ERROR: expected exactly one begin_cycle() call, found {len(begins)}")
-        failed = True
-    if not fetches:
-        print("ERROR: found no fetch_inverter_data() calls, so this test proves nothing")
-        failed = True
-    if begins and fetches and begins[0] > min(fetches):
-        print("ERROR: begin_cycle() runs after an inverter fetch, so read-path writes are stamped with the previous cycle")
-        failed = True
+    import ast
+
+    tree = ast.parse(source)
+    for method_name in ("update_pred", "run_time_loop"):
+        method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == method_name)
+        segment = ast.get_source_segment(source, method)
+        begins = [i for i in range(len(segment)) if segment.startswith("self.control_ledger.begin_cycle()", i)]
+        fetches = [i for i in range(len(segment)) if segment.startswith("self.fetch_inverter_data()", i)]
+        if len(begins) != 1 or not fetches or begins[0] > min(fetches):
+            print(f"ERROR: {method_name} must begin exactly one cycle before any inverter read")
+            failed = True
     assert not failed, "test_begin_cycle_precedes_every_inverter_read"
 
 

@@ -22,6 +22,8 @@ def options(row, initial, reserve, capacity, charge_kw, discharge_kw, efficiency
     natural = min(maximum, max(minimum, natural))
     # Try natural self-consumption first, so equal-cost alternatives avoid forced modes.
     choices = [natural, initial, maximum, minimum] + [reserve + (capacity - reserve) * i / 32 for i in range(33)]
+    if "terminal_target" in row:
+        choices.append(row["terminal_target"])
     for final in choices:
         if not minimum - 1e-9 <= final <= maximum + 1e-9:
             continue
@@ -37,12 +39,19 @@ def options(row, initial, reserve, capacity, charge_kw, discharge_kw, efficiency
         yield dict(energy=final, grid=grid, battery_ac=battery_ac, pv_used=pv_used - curtailed, cost=cost, objective=cost + abs(change) * wear, mode=mode)
 
 
-def build_model(rows, reserve, capacity, charge_kw=3.68, discharge_kw=3.68, efficiency=0.95, wear=0.5, inverter_kw=3.68, export_kw=3.68):
+def build_model(rows, reserve, capacity, charge_kw=3.68, discharge_kw=3.68, efficiency=0.95, wear=0.5, inverter_kw=3.68, export_kw=3.68, terminal_soc=0):
     """Solve all tail starting states and retain continuation costs for path recovery."""
     parameters = (reserve, capacity, charge_kw, discharge_kw, efficiency, wear, inverter_kw, export_kw)
     if not all(math.isfinite(v) for v in parameters) or not 0 <= reserve < capacity or not 0 < efficiency <= 1 or min(charge_kw, discharge_kw, wear, inverter_kw, export_kw) < 0:
         raise ValueError("Invalid battery parameters")
-    costs = [[0.0] * 33]
+    if not math.isfinite(terminal_soc) or not 0 <= terminal_soc <= 100:
+        raise ValueError("Invalid terminal SoC")
+    target = max(reserve, capacity * terminal_soc / 100)
+    # A strong finite shortfall penalty prioritises the target without NaNs for
+    # physically unreachable starting states. Never count this as a metered cost.
+    penalty = 100 * (1 + wear + max((max(abs(row["import"]), abs(row["export"])) for row in rows), default=0) / efficiency)
+    rows = [dict(row, terminal_target=target) for row in rows] if terminal_soc else rows
+    costs = [[max(0, target - (reserve + (capacity - reserve) * i / 32)) * penalty for i in range(33)]]
     for row in reversed(rows):
         if not 0 < row["minutes"] <= 30 or any(not math.isfinite(row[k]) for k in ("import", "export", "load", "pv")) or min(row["load"], row["pv"]) < 0:
             raise ValueError("Invalid forecast row")

@@ -121,6 +121,7 @@ def prepare_context(p):
             wear=p.metric_battery_cycle,
             inverter_kw=p.inverter_limit * 60,
             export_kw=p.export_limit * 60,
+            terminal_soc=p.get_arg("optimise_context_terminal_soc", 0.0),
         )
         nominal = build_model(usable, **parameters)
         duration = sum(row["minutes"] for row in usable)
@@ -129,6 +130,8 @@ def prepare_context(p):
         p._price_context_curve = [0.75 * base + 0.25 * cautious for base, cautious in zip(nominal["curve"], downside["curve"])]
         p.price_context_rows = [dict(row, start=row["start"].isoformat(), end=row["end"].isoformat()) for row in usable]
         p.price_context_status = "Forecast simulation; not scheduled. Valuation: 75% nominal, 25% lower solar (-30%) and +2kWh demand. No value beyond final row."
+        if parameters["terminal_soc"]:
+            p.price_context_status += " End target: at least {}% SoC where physically achievable.".format(parameters["terminal_soc"])
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as error:
         p.log("Price context unavailable: {}".format(type(error).__name__))
     finally:

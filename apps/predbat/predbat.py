@@ -34,7 +34,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.0.2-alphaess.2-forecast5"
+THIS_VERSION = "v9.0.2-alphaess.2-forecast6"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -2052,6 +2052,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         self.check_entity_refresh()
         self.validate_config_check_retry()
+        if self.get_arg("slot_aligned_planning", False) and not self.update_pending and not self.prediction_started:
+            if self.slot_plan_key() != getattr(self, "_last_slot_plan_key", None):
+                self.run_time_loop(cb_args)
+                return
         if self.update_pending and not self.prediction_started:
             # Full update required
             self.update_pending = False
@@ -2116,6 +2120,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.log("Info: Refresh config entities as config_refresh state is unknown")
             self.update_pending = True
 
+    @staticmethod
+    def slot_plan_key():
+        """Latest :28/:58 pre-boundary or :03/:33 post-boundary planning event."""
+        minute = int(time.time() // 60)
+        block = minute // 30 * 30
+        return max(event for event in (block - 2, block + 3, block + 28) if event <= minute)
+
     def run_time_loop(self, cb_args):
         """
         Called every N minutes
@@ -2138,6 +2149,35 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     config_changed = True
 
                 # Run the prediction
+                if self.get_arg("slot_aligned_planning", False):
+                    self.update_time()
+                    key = self.slot_plan_key()
+                    full_plan = config_changed or not self.plan_valid or key != getattr(self, "_last_slot_plan_key", None)
+                    ev_state = tuple(str(self.get_arg("car_charging_planned", "no", index=car)).lower() for car in range(self.num_cars))
+                    if ev_state != getattr(self, "_slot_ev_state", None):
+                        full_plan = True
+                    # Midnight rebases minute-indexed windows before execution.
+                    if self.plan_last_updated.date() != self.now_utc_real.date():
+                        full_plan = True
+                    if not full_plan:
+                        for windows, limits in ((self.charge_window_best, self.charge_limit_best), (self.export_window_best, self.export_limits_best)):
+                            while windows and windows[0]["end"] <= self.minutes_now:
+                                windows.pop(0)
+                                limits.pop(0)
+                        for windows in getattr(self, "car_charging_slots", []):
+                            while windows and windows[0]["end"] <= self.minutes_now:
+                                windows.pop(0)
+                        self.control_ledger.begin_cycle()
+                        if self.fetch_inverter_data():
+                            status, extra = self.execute_plan()
+                            self.record_final_run_status(status, extra)
+                            self.log("Slot-aligned execution check; retained optimised windows")
+                        else:
+                            self.record_status("Error: Failed inverter read during execution check", had_errors=True)
+                        return
+                    self._last_slot_plan_key = key
+                    self._slot_ev_state = ev_state
+                    self.plan_valid = False
                 self.update_pred(scheduled=True)
 
                 if config_changed:
