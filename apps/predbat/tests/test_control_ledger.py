@@ -1622,17 +1622,17 @@ def test_begin_cycle_precedes_every_inverter_read():
     import os
 
     source = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "predbat.py")).read()
-    begins = [i for i in range(len(source)) if source.startswith("self.control_ledger.begin_cycle()", i)]
-    fetches = [i for i in range(len(source)) if source.startswith("self.fetch_inverter_data()", i)]
-    if len(begins) != 1:
-        print(f"ERROR: expected exactly one begin_cycle() call, found {len(begins)}")
-        failed = True
-    if not fetches:
-        print("ERROR: found no fetch_inverter_data() calls, so this test proves nothing")
-        failed = True
-    if begins and fetches and begins[0] > min(fetches):
-        print("ERROR: begin_cycle() runs after an inverter fetch, so read-path writes are stamped with the previous cycle")
-        failed = True
+    import ast
+
+    tree = ast.parse(source)
+    for method_name in ("update_pred", "run_time_loop"):
+        method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == method_name)
+        segment = ast.get_source_segment(source, method)
+        begins = [i for i in range(len(segment)) if segment.startswith("self.control_ledger.begin_cycle()", i)]
+        fetches = [i for i in range(len(segment)) if segment.startswith("self.fetch_inverter_data()", i)]
+        if len(begins) != 1 or not fetches or begins[0] > min(fetches):
+            print(f"ERROR: {method_name} must begin exactly one cycle before any inverter read")
+            failed = True
     assert not failed, "test_begin_cycle_precedes_every_inverter_read"
 
 
@@ -1845,6 +1845,8 @@ def test_every_entry_point_opens_its_own_cycle():
     stub = Execute.__new__(Execute)
     ledger = ControlLedger()
     stub.control_ledger = ledger
+    # The template-mode guard reads config before anything else; answer with the default (off)
+    stub.get_arg = lambda arg, default=None, **kwargs: default
     stub.inverters = []
     stub.fetch_inverter_data = lambda create=True: False
     before = ledger.cycle
@@ -1860,6 +1862,16 @@ def test_every_entry_point_opens_its_own_cycle():
     if ledger.cycle != before:
         print("ERROR: quick_inverter_data_update opened a cycle with no inverters to read")
         failed = True
+
+    # Template mode must return before begin_cycle() - it would otherwise burn a ledger cycle on
+    # every tick of update_time_loop, since nothing stamps inverter_data_last_fetch there.
+    stub.get_arg = lambda arg, default=None, **kwargs: True if arg == "template" else default
+    stub.inverters = []
+    before = ledger.cycle
+    if stub.quick_inverter_data_update() is not False or ledger.cycle != before:
+        print("ERROR: template mode did not return False before opening a control-ledger cycle")
+        failed = True
+    stub.get_arg = lambda arg, default=None, **kwargs: default
 
     # A missing ledger must not take the path out.
     stub.inverters = []

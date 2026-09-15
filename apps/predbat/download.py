@@ -27,7 +27,7 @@ import hashlib
 import tarfile
 import tempfile
 
-DEFAULT_PREDBAT_REPOSITORY = "springfall2008/batpred"
+DEFAULT_PREDBAT_REPOSITORY = "markgraham924/batpred-alphaess"
 
 # Number of attempts made for a download that fails integrity verification
 DOWNLOAD_MAX_ATTEMPTS = 3

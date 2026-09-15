@@ -6547,19 +6547,22 @@ def get_plan_css():
         closeDropdowns();
     }
 
-    // Handle SOC override
-    function handleSocOverride(time, dropdownId, isClear) {
+    // Handle SOC override (isMax selects the manual_soc_max ceiling instead of the manual_soc floor)
+    function handleSocOverride(time, dropdownId, isClear, isMax) {
+        const inputPrefix = isMax ? 'socmax_' : 'soc_';
+        const overrideKey = isMax ? 'manual_soc_max' : 'manual_soc';
+
         // Get the SOC value from the input field (unless clearing)
         let value = null;
         if (!isClear && dropdownId) {
-            const inputElement = document.getElementById('soc_' + dropdownId);
+            const inputElement = document.getElementById(inputPrefix + dropdownId);
             if (inputElement) {
                 value = inputElement.value;
             }
         } else if (isClear) {
             // When clearing, we need to find the actual stored SOC for this time
             const minutesFromMidnight = getMinutesFromTimeString(time);
-            const override = window.overridesData.manual_soc.find(r => r.minutes === minutesFromMidnight);
+            const override = window.overridesData[overrideKey].find(r => r.minutes === minutesFromMidnight);
             if (override) {
                 value = override.target;
             } else {
@@ -6568,7 +6571,7 @@ def get_plan_css():
         }
 
         // Construct the action string the server expects
-        const action = isClear ? 'Clear SOC' : 'Set SOC';
+        const action = isMax ? (isClear ? 'Clear SOC Max' : 'Set SOC Max') : (isClear ? 'Clear SOC' : 'Set SOC');
 
         // Create a form data object to send the override parameters
         const formData = new FormData();
@@ -6586,10 +6589,11 @@ def get_plan_css():
             if (data.success) {
                 // Show success message
                 const messageElement = document.createElement('div');
+                const label = isMax ? 'SOC max' : 'SOC';
                 if (isClear) {
-                    messageElement.textContent = `SOC override cleared for ${time}`;
+                    messageElement.textContent = `${label} override cleared for ${time}`;
                 } else {
-                    messageElement.textContent = `SOC target set to ${value}% for ${time}`;
+                    messageElement.textContent = `${label} target set to ${value}% for ${time}`;
                 }
                 messageElement.style.position = 'fixed';
                 messageElement.style.top = '65px';
@@ -6728,6 +6732,9 @@ def get_plan_renderer_js():
             // the History/Yesterday views publish their own copy alongside their own rows.
             const reasonTemplates = jsonData.reason_templates;
 
+            const forecastRows = editable ? forecastPlanRows(jsonData) : [];
+            const displayRows = [...jsonData.rows, ...forecastRows];
+
             let html = '<table>';
             const cellStyle = 'style="padding: 4px;"';
 
@@ -6741,6 +6748,7 @@ def get_plan_renderer_js():
                 export: `The export rate for this slot, in ${currencyMinor} per kWh. Bold if a discharge/export is planned this slot.`,
                 state: "What the battery is doing this slot - hover a state cell for the specific reason.",
                 alphaess_mode: 'The physical mode the guarded AlphaESS controller is expected to apply this slot.',
+                towels: 'Price-capped towel-radiator runs selected by Home Energy Orchestrator for this slot.',
                 limit: 'The battery SoC Predbat is planning to reach by the end of this slot.',
                 pv: 'Predicted solar generation for this slot, from the Solcast forecast.',
                 load: 'Predicted house electricity consumption for this slot, from historical data.',
@@ -6771,6 +6779,9 @@ def get_plan_renderer_js():
             if (jsonData.alphaess_mode_column) {
                 html += th('alphaess_mode', 'AlphaESS mode');
             }
+            if (jsonData.towel_schedule_column) {
+                html += th('towels', 'Towels');
+            }
             html += th('limit', 'Limit %');
             html += showDebug ? th('pv', 'PV kWh (10%)') : th('pv', 'PV kWh');
             html += showDebug ? th('load', 'Load kWh (10%)') : th('load', 'Load kWh');
@@ -6799,13 +6810,15 @@ def get_plan_renderer_js():
             html += '</tr>';
 
             // Render rows
-            for (let i = 0; i < jsonData.rows.length; i++) {
-                const row = jsonData.rows[i];
-                html += '<tr style="color:black">';
+            for (let i = 0; i < displayRows.length; i++) {
+                const row = displayRows[i];
+                const rowEditable = editable && !row.forecast_only;
+                const forecastAttrs = row.forecast_only ? ' data-forecast="true" title="Estimated prices; this plan will change as new information arrives."' : '';
+                html += `<tr style="color:black"${forecastAttrs}>`;
 
                 // Time cell with dropdown (if editable)
                 const timeDisplay = formatTimeDisplay(row.time);
-                if (editable) {
+                if (rowEditable) {
                     html += renderTimeCell(row.time, timeDisplay, overrides, row.slot_minute);
                 } else {
                     html += `<td id=time bgcolor=#FFFFFF>${timeDisplay}</td>`;
@@ -6832,7 +6845,7 @@ def get_plan_renderer_js():
                 if (importBold) {
                     importText = `<b>${importText}</b>`;
                 }
-                if (editable) {
+                if (rowEditable) {
                     html += renderRateCell(row.import_rate, row.rate_color_import, 'import', row.time, timeDisplay, overrides, importText, row.slot_minute);
                 } else if (row.rate_split) {
                     // Car's own rate has diverged from the house rate - not necessarily an IOG cap
@@ -6860,7 +6873,7 @@ def get_plan_renderer_js():
                 if (exportAdjustType) {
                     exportText = `<i>${exportText}${exportAdjust}</i>`;
                 }
-                if (editable) {
+                if (rowEditable) {
                     html += renderRateCell(row.export_rate, row.rate_color_export, 'export', row.time, timeDisplay, overrides, exportText, row.slot_minute);
                 } else {
                     html += `<td id=export ${cellStyle} bgcolor=${row.rate_color_export || '#FFFFFF'}>${exportText}</td>`;
@@ -6868,7 +6881,7 @@ def get_plan_renderer_js():
 
                 // State cells (with rowspan and split handling)
                 if (!row.skip_state_cell) {
-                    if (editable) {
+                    if (rowEditable) {
                         html += renderStateCell(row, timeDisplay, overrides, reasonTemplates);
                     } else {
                         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
@@ -6886,6 +6899,10 @@ def get_plan_renderer_js():
                 if (jsonData.alphaess_mode_column) {
                     const alphaessTitle = row.alphaess_mode_title ? ` title="${escapeAttr(row.alphaess_mode_title)}"` : '';
                     html += `<td id=alphaess_mode ${cellStyle} bgcolor=${row.alphaess_mode_color || '#FFFFFF'}${alphaessTitle}>${row.alphaess_mode || ''}</td>`;
+                }
+                if (jsonData.towel_schedule_column) {
+                    const towelTitle = row.towel_schedule_title ? ` title="${escapeAttr(row.towel_schedule_title)}"` : '';
+                    html += `<td id=towel_schedule ${cellStyle} bgcolor=${row.towel_schedule_color || '#FFFFFF'}${towelTitle}>${row.towel_schedule || ''}</td>`;
                 }
 
                 // Limit cell (with rowspan handling)
@@ -6905,7 +6922,7 @@ def get_plan_renderer_js():
                 html += `<td id=pv bgcolor=${row.pv_color || '#FFFFFF'}>${pvText}</td>`;
 
                 // Load forecast (with 10% value in brackets if debug mode)
-                if (editable) {
+                if (rowEditable) {
                     html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5, row.slot_minute);
                 } else {
                     let loadText = row.load_forecast !== undefined ? row.load_forecast : '';
@@ -6941,7 +6958,7 @@ def get_plan_renderer_js():
 
                 // SOC
                 const socSym = row.soc_sym || (row.soc_change > 0 ? '&nearr;' : (row.soc_change < 0 ? '&searr;' : '&rarr;'));
-                if (editable) {
+                if (rowEditable) {
                     html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides, row.slot_minute);
                 } else {
                     html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}>${row.soc_percent}${socSym}</td>`;
@@ -6986,12 +7003,23 @@ def get_plan_renderer_js():
 
             // Render totals row if available
             if (jsonData.totals) {
-                const totals = jsonData.totals;
+                const totals = {...jsonData.totals};
+                if (forecastRows.length) {
+                    const last = jsonData.forecast_simulation[jsonData.forecast_simulation.length - 1];
+                    totals.total_cost = ((last.total_p + last.cost_p) / 100).toFixed(2);
+                    totals.soc_percent = Math.round(last.soc_end);
+                    totals.pv_forecast = Number(((totals.pv_forecast || 0) + jsonData.forecast_simulation.reduce((sum, row) => sum + row.pv, 0)).toFixed(2));
+                    totals.load_forecast = Number(((totals.load_forecast || 0) + jsonData.forecast_simulation.reduce((sum, row) => sum + row.load, 0)).toFixed(2));
+                    totals.total_carbon = null;
+                }
                 html += '<tr style="color:black">';
 
                 // Empty cells for Time, Import, Export, State (colspan 2), optional AlphaESS mode, Limit %
                 html += '<td></td><td></td><td></td><td></td><td></td>';
                 if (jsonData.alphaess_mode_column) {
+                    html += '<td></td>';
+                }
+                if (jsonData.towel_schedule_column) {
                     html += '<td></td>';
                 }
                 html += '<td></td>';
@@ -7050,6 +7078,7 @@ def get_plan_renderer_js():
             }
 
             html += '</table>';
+            if (forecastRows.length) html += '<style>tr[data-forecast] > td {background-image:linear-gradient(rgba(150,125,210,0.16),rgba(150,125,210,0.16));} tr[data-forecast] > td:first-child {border-left:3px solid #aa91cb;white-space:nowrap;}</style>';
             return html;
         } catch (error) {
             console.error('Error rendering plan:', error);
@@ -7144,8 +7173,10 @@ def get_plan_renderer_js():
         });
         // A split cell's first half is always a demand_before_export_* code paired with the export
         // reason as its second half - prefix "Then" (no comma) so the two read as one narrative
-        // instead of two disconnected sentences.
-        if (reasons.length === 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && reasons[0].code.indexOf('demand_before_export_') === 0) {
+        // instead of two disconnected sentences. Length is >= 2 rather than == 2 because a history
+        // slot that held more than one state appends a mixed_slot_states note after the pair, and
+        // that must not cost the narrative its "Then".
+        if (reasons.length >= 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && reasons[0].code.indexOf('demand_before_export_') === 0) {
             rendered[1] = 'Then ' + rendered[1].charAt(0).toLowerCase() + rendered[1].slice(1);
         }
         return rendered.filter(Boolean).join(' ');
@@ -7288,21 +7319,28 @@ def get_plan_renderer_js():
         return html;
     }
 
-    // Render SOC cell with dropdown for manual SOC targets
+    // Render SOC cell with dropdown for manual SOC targets (minimum floor and maximum ceiling)
     function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides, slotMinute) {
         const dropdownId = `dropdown_${dropdownCounter++}`;
         const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_soc.some(r => r.minutes === minutesFromMidnight);
+        const isOverrideMax = overrides.manual_soc_max.some(r => r.minutes === minutesFromMidnight);
 
         let html = `<td id=soc data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
-        html += `${socValue}${socSym}${isOverride ? ' &#8526;' : ''}`;
+        html += `${socValue}${socSym}${isOverride ? ' &#8526;' : ''}${isOverrideMax ? ' &#11015;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
-        html += '<label>Target SOC (%):</label>';
+        html += '<label>Minimum SOC (%):</label>';
         html += `<input type="number" id="soc_${dropdownId}" value="${socValue}" step="1" min="0" max="100">`;
         html += `<button onclick="handleSocOverride('${timeDisplay}', '${dropdownId}')">Set Target</button>`;
         if (isOverride) {
             html += `<a onclick="handleSocOverride('${timeDisplay}', null, true)">Clear</a>`;
+        }
+        html += '<label>Maximum SOC (%):</label>';
+        html += `<input type="number" id="socmax_${dropdownId}" value="${socValue}" step="1" min="0" max="100">`;
+        html += `<button onclick="handleSocOverride('${timeDisplay}', '${dropdownId}', false, true)">Set Max</button>`;
+        if (isOverrideMax) {
+            html += `<a onclick="handleSocOverride('${timeDisplay}', null, true, true)">Clear</a>`;
         }
         html += '</div></div></td>';
         return html;
@@ -7532,6 +7570,55 @@ def get_plan_renderer_js():
         refreshPlan();
     }
 
+    // Adapt forecast results to the normal plan-row schema, not a second renderer.
+    function forecastPlanRows(data) {
+        if (!Array.isArray(data.forecast_simulation)) return [];
+        const number = value => Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
+        const states = {'Normal': ['Demand', '↗', '#FFFFFF'], 'Mode 19': ['FrzExp', 'FrzExp→', '#AAAAAA'],
+            'Force Chg': ['Chrg', 'Chrg↗', '#3AEE85'], 'Force Exp': ['Exp', 'Exp↘', '#FFFF00'], 'Hold': ['HoldChrg', 'Hold→', '#C0C0C0']};
+        return data.forecast_simulation.map(row => {
+            const mode = Object.hasOwn(states, row.mode) ? row.mode : 'Normal';
+            const [state, label, color] = states[mode];
+            return {forecast_only: true, time: row.start, import_rate: row.import, export_rate: row.export,
+                state, state_text: state === 'Demand' ? (row.soc_end >= row.soc_start ? '↗' : '↘') : label,
+                state_color: color, alphaess_mode: mode, alphaess_mode_color: color,
+                alphaess_mode_title: 'Modelled using estimated prices; not an issued command',
+                show_limit: mode === 'Force Chg' || mode === 'Force Exp' ? Math.round(row.soc_end) : '',
+                pv_forecast: number(row.pv), load_forecast: number(row.load),
+                pv_color: '#FFAAAA', load_color: '#FFFF00', soc_color: row.soc_start >= 50 ? '#3AEE85' : '#FFFF00',
+                rate_color_import: row.import <= data.import_cost_threshold ? '#3AEE85' : '#FFFF00',
+                rate_color_export: '#48deff', cost_color: row.cost_p < -0.5 ? '#00FF00' : row.cost_p > 0.5 ? '#FFAAAA' : '#FFFFFF',
+                soc_percent: Math.round(row.soc_start), soc_change: row.soc_end - row.soc_start,
+                cost_change: row.cost_p / 100, total_cost: row.total_p / 100,
+                extra_load: data.rows.some(value => value.extra_load !== undefined) ? '—' : undefined,
+                clipped: '—'};
+        });
+    }
+
+
+    // Forecast context is informational, never an executable schedule.
+    function renderForecastContext(data, view) {
+        if (Array.isArray(data.forecast_simulation) && data.forecast_simulation.length) return '';
+        if (view !== 'plan' || !Array.isArray(data.forecast_context)) return '';
+        const escapeText = value => String(value ?? '').replace(/[&<>"']/g, char =>
+            ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
+        const numberText = value => typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : '—';
+        let html = '<section id="forecastContext"><h2>Forecast context — not scheduled</h2>';
+        html += '<p>Indicative prices beyond the actionable plan. These rows provide planning context, not charge or export commands.</p>';
+        if (!data.forecast_context.length) {
+            return html + '<p>No usable forecast context is currently available; existing battery valuation is retained.</p></section>';
+        }
+        html += '<div style="overflow-x:auto"><table><thead><tr><th>Time (with UTC offset)</th><th>Band</th>';
+        html += '<th>Indicative import p/kWh</th><th>Indicative export p/kWh</th><th>Load kWh</th><th>PV kWh</th></tr></thead><tbody>';
+        for (const row of data.forecast_context) {
+            if (!row || typeof row !== 'object') continue;
+            html += '<tr><td>' + escapeText(row.start) + '</td><td>' + escapeText(row.band) + '</td>';
+            for (const key of ['import', 'export', 'load', 'pv']) html += '<td>' + numberText(row[key]) + '</td>';
+            html += '</tr>';
+        }
+        return html + '</tbody></table></div></section>';
+    }
+
     // Refresh plan display
     function refreshPlan() {
         const container = document.getElementById('planContainer');
@@ -7581,6 +7668,7 @@ def get_plan_renderer_js():
         // future predictions with no corresponding capture.
         const showHistoryLinks = (currentView === 'yesterday');
         container.innerHTML = renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
+        container.innerHTML += renderForecastContext(data, currentView);
 
         // Apply dark mode colors if needed
         updateTableColors();
@@ -8159,6 +8247,14 @@ function downloadLiveApps() {
         window.location.href = './debug_apps_live?masked=0';
     } else {
         window.location.href = './debug_apps_live?masked=1';
+    }
+}
+
+function downloadFileApps() {
+    if (confirm(`Download apps.yaml with real credentials?\\n\\nOK = full unmasked file\\nCancel = masked file (credentials redacted)`)) {
+        window.location.href = './debug_apps?masked=0';
+    } else {
+        window.location.href = './debug_apps?masked=1';
     }
 }
 

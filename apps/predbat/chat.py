@@ -975,6 +975,12 @@ class ChatAgent(ComponentBase):
     # still reach.
     provider_name = "openrouter"
     provider = PROVIDERS["openrouter"]
+    # Same reasoning, for the two provider_ready() reads: list_models() now asks whether anything
+    # is configured before it will dial an endpoint, and an agent that never reached initialize()
+    # has configured nothing - so "no providers, none active" is both the truthful answer and the
+    # safe one.
+    providers = []
+    active_provider = None
 
     def initialize(self, config=None):
         """Store configuration and build the conversation store and event buffer.
@@ -1255,11 +1261,25 @@ class ChatAgent(ComponentBase):
         for it) - the Chat tab's footer uses it to show how full the context window is against the
         model actually in use, alongside the token count itself; see html_chat_models() and
         renderContextUsage() in web_chat.py.
+
+        An install with no usable provider fetches nothing at all and offers only whatever model
+        apps.yaml already names; see the guard below for why that is not merely an optimisation.
         """
         catalogue = None
         # Cleared per call: a cache hit never runs the fetch, so a reason left over from an
         # earlier failure would be reported against a catalogue that arrived perfectly well.
         self.catalogue_error = None
+        # Nothing usable is configured, so no endpoint's catalogue means anything here - and the
+        # fallback base_url is OpenRouter's, whose /models is served unauthenticated. The fetch
+        # therefore came back 200 rather than the 401 that would have stopped it, so an install
+        # with nothing set up made an outbound request on every view of the setup page and cached
+        # several hundred KB of a catalogue it cannot use. provider_ready() rather than "nothing
+        # is selected": an entry written down without its key is active but equally unusable, and
+        # it is the same predicate the turn path already refuses on. An endpoint the user is
+        # still typing into is probe_models()' job, which deliberately does not come through here.
+        if not self.provider_ready():
+            self.catalogue_error = NO_PROVIDER_MESSAGE
+            return await self._catalogue_to_models(None, self.provider, self.base_url, self.default_model)
         storage = self.storage
         try:
             if storage:
@@ -1356,12 +1376,29 @@ class ChatAgent(ComponentBase):
         One request per model, measured at about 76ms each against a local server, and
         list_models() is cached for a day - but a single slow or missing model must not lose the
         whole catalogue, so a failed lookup keeps the model rather than dropping it.
+
+        /api/show reports the context length baked into the model, which is a ceiling rather than
+        what the model will actually be loaded with: the server caps every model at
+        OLLAMA_CONTEXT_LENGTH - on macOS an Ollama app setting, not an environment variable - and
+        Qwen3.8 27B's 262144 becomes 131072 behind a 128k cap. /api/ps carries the effective value
+        for each loaded model, so it is read once and used in preference. A model the server has
+        never loaded is not listed there and keeps its own ceiling, which is the only answer
+        available and still better than reporting it for everything.
+
+        This matters beyond a wrong number in the picker: the Chat tab's context counter measures
+        fullness against it, so a doubled limit reads half-full at the point the window is really
+        full - which is how a turn overflows with no warning.
         """
         base = ollama_native_url(base_url or self.base_url, "")
         detailed = []
         timeout = aiohttp.ClientTimeout(total=OLLAMA_DETAIL_TIMEOUT_SECONDS)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
+                # Only a locally loaded model can have been capped, so a catalogue with nothing
+                # local in it has nothing /api/ps could override. Ollama Cloud refuses that
+                # endpoint anyway - 401 with or without a key, because "loaded" is a local-server
+                # idea - so asking would spend a round trip to learn nothing.
+                loaded_context = {} if all(model.get("remote") for model in models) else await self._ollama_loaded_context(session, base)
                 for model in models:
                     try:
                         async with session.post("{}/api/show".format(base), json={"model": model["id"]}) as response:
@@ -1377,10 +1414,44 @@ class ChatAgent(ComponentBase):
                         continue
                     info = body.get("model_info") or {}
                     context = next((value for key, value in info.items() if key.endswith("context_length")), None)
-                    detailed.append(dict(model, context_length=context or model.get("context_length")))
+                    context = context or model.get("context_length")
+                    # The server's own figure wins where it has one - see the docstring. Falsy is
+                    # deliberately "no answer" rather than an answer of zero throughout: no model
+                    # has a zero-token window, so a 0 from either endpoint is a placeholder or a
+                    # bug, and taking it would replace a usable figure with one that tells the user
+                    # nothing. The client agrees - contextLengthForModel() returns
+                    # `context_length || null` and renderContextUsage() shows the token count alone
+                    # when the limit is falsy.
+                    effective = loaded_context.get(model["id"])
+                    detailed.append(dict(model, context_length=effective or context))
         except (aiohttp.ClientError, asyncio.TimeoutError):
             return models
         return detailed
+
+    @staticmethod
+    async def _ollama_loaded_context(session, base):
+        """Return {model id: context length} for the models the Ollama server has loaded.
+
+        Empty when /api/ps cannot be read or nothing is loaded, which leaves every model on its
+        own ceiling - the same answer as before this existed, so a server too old to serve the
+        endpoint degrades to the previous behaviour rather than losing the catalogue.
+        """
+        try:
+            async with session.get("{}/api/ps".format(base)) as response:
+                if response.status != 200:
+                    return {}
+                body = await response.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+            return {}
+        loaded = {}
+        for entry in (body or {}).get("models") or []:
+            name = entry.get("model") or entry.get("name")
+            context = entry.get("context_length")
+            # A zero is filtered out here rather than downstream, so it can never win over a
+            # model's own figure - see the note beside that comparison.
+            if name and context:
+                loaded[name] = context
+        return loaded
 
     async def _stream_chunks(self, payload):
         """Yield decoded chunk dicts from the chat-completions endpoint.

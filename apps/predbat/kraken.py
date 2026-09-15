@@ -1072,6 +1072,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 attributes={
                     "friendly_name": "Kraken Import Rates",
                     "rates": self.import_rates,
+                    **self.rate_coverage(self.import_rates),
                     "tariff_code": self.current_tariff["tariff_code"],
                     "product_code": self.current_tariff["product_code"],
                     "icon": "mdi:currency-gbp",
@@ -1097,12 +1098,42 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 attributes={
                     "friendly_name": "Kraken Export Rates",
                     "rates": self.export_rates,
+                    **self.rate_coverage(self.export_rates),
                     "tariff_code": self.export_tariff["tariff_code"],
                     "product_code": self.export_tariff["product_code"],
                     "icon": "mdi:currency-gbp",
                 },
                 app="kraken",
             )
+
+    @staticmethod
+    def rate_coverage(rates, now=None):
+        """Describe timestamp coverage independently of connection/cache health."""
+        now = now or datetime.now(timezone.utc)
+        periods = []
+        for rate in rates or []:
+            try:
+                start = datetime.fromisoformat(rate["valid_from"].replace("Z", "+00:00"))
+                end = datetime.fromisoformat(rate["valid_to"].replace("Z", "+00:00"))
+                if start.tzinfo is None or end.tzinfo is None or end <= start:
+                    continue
+                periods.append((start, end))
+            except (KeyError, TypeError, ValueError, AttributeError):
+                continue
+        periods.sort()
+        covered_until = now
+        for start, end in periods:
+            if start <= covered_until < end:
+                covered_until = end
+        current = covered_until > now
+        return {
+            "coverage_checked_at": now.isoformat(),
+            "coverage_start": min((start for start, _ in periods), default=None).isoformat() if periods else None,
+            "coverage_end": max((end for _, end in periods), default=None).isoformat() if periods else None,
+            "current_rate_available": current,
+            "confirmed_until": covered_until.isoformat() if current else None,
+            "coverage_status": "current" if current else "missing_current_rate",
+        }
 
     # ------------------------------------------------------------------
     # SmartFlex intelligent dispatches (provider-managed smart charging)
