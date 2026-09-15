@@ -33,3 +33,9 @@ This stable fork release captures the deployed seven-day planning context: E.ON 
 Release discovery, tagged downloads and startup verification now default to `markgraham924/batpred-alphaess`. Home Assistant links to the offered fork release, rather than an upstream URL containing a fork-only tag.
 
 Validation: offline release-card, seven-day coverage, forecast, slot execution and terminal-target regressions pass. The GitNexus Windows runner failed during native dependency installation; direct call-site inspection and scoped diff review were used instead.
+
+## v9.0.2-alphaess.4 - upstream clock fixes
+
+Includes upstream main through `df6c4b9f`, with timezone-aware clock handling, the Solcast midnight race fix and upstream inverter fixes. Preserves the AlphaESS control guards, seven-day price context, 50% terminal target, slot scheduling and fork release discovery.
+
+Published as a new immutable release so existing installations can identify the updated source correctly.
