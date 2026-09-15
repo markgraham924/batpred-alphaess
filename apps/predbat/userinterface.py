@@ -36,6 +36,7 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
+from download import DEFAULT_PREDBAT_REPOSITORY
 
 # A debug dump is several megabytes of deeply nested YAML and PyYAML's pure-Python parser spends
 # most of a replay's wall-clock on it - about 6s for a 5MB dump. CLoader pairs libyaml's C parser
@@ -603,7 +604,7 @@ class UserInterface:
                                 "installed_version": item["installed_version"],
                                 "latest_version": latest,
                                 "entity_picture": item["entity_picture"],
-                                "release_url": item["release_url"],
+                                "release_url": f"https://github.com/{DEFAULT_PREDBAT_REPOSITORY}/releases/tag/{latest}",
                                 "release_summary": summary,
                                 "skipped_version": None,
                                 "supported_features": 1,

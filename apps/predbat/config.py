@@ -19,6 +19,7 @@ and calculation options.
 """
 
 from predbat import THIS_VERSION
+from download import DEFAULT_PREDBAT_REPOSITORY
 from const import OPTIONS_TIME, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE
 
 # Predbat update options
@@ -33,7 +34,7 @@ CONFIG_ITEMS = [
         "type": "update",
         "title": "Predbat",
         "installed_version": THIS_VERSION,
-        "release_url": f"https://github.com/springfall2008/batpred/releases/tag/{THIS_VERSION}",
+        "release_url": f"https://github.com/{DEFAULT_PREDBAT_REPOSITORY}/releases/tag/{THIS_VERSION}",
         "entity_picture": "https://user-images.githubusercontent.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png",
         "restore": False,
         "default": False,
@@ -2769,6 +2770,7 @@ APPS_SCHEMA = {
     "sunsynk_battery_nominal_voltage": {"type": "float"},
     "optimise_context_enable": {"type": "boolean"},
     "optimise_context_source": {"type": "string"},
+    "optimise_context_pv_sources": {"type": "string_list"},
     "alphaess_app_id": {"type": "string", "empty": False},
     "alphaess_app_secret": {"type": "string", "empty": False},
     "alphaess_inverter_sn": {"type": "string|string_list", "empty": False},

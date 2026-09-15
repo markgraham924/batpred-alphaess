@@ -55,14 +55,14 @@ class ContextTests(unittest.TestCase):
         self.assertLess(curve[-1], 0)
 
     def test_timestamp_coverage(self):
-        """Stop at first gap, cap at 36h, reject stale data and never repeat."""
+        """Stop at first gap, cap at six days, reject stale data and never repeat."""
         now = datetime(2026, 9, 13, tzinfo=timezone.utc)
         boundary = now + timedelta(hours=24)
         values = []
-        for i in range(80):
+        for i in range(320):
             values.append(dict(start=(boundary + timedelta(minutes=30 * i)).isoformat(), end=(boundary + timedelta(minutes=30 * (i + 1))).isoformat(), **{"import": 20}, export=16, band="medium"))
         snapshot = dict(issued_at=now.isoformat(), rates=values)
-        self.assertEqual(len(parse_context(snapshot, boundary, now)), 72)
+        self.assertEqual(len(parse_context(snapshot, boundary, now)), 288)
         snapshot["rates"] = values[:2] + values[3:]
         self.assertEqual(len(parse_context(snapshot, boundary, now)), 2)
         with self.assertRaises(ValueError):

@@ -25,3 +25,11 @@ Back up code and configuration first, preserving credentials outside Git.
 Restart only the Predbat app, retaining the controller enable settings.
 Verify a fresh completed plan, controller health, price coverage and EV state.
 Restore the backed-up runtime if startup or control verification fails.
+
+## v9.0.2-alphaess.3 — deployed source alignment
+
+This stable fork release captures the deployed seven-day planning context: E.ON supplies the executable day, followed by six days of Agile Predict context, with available Solcast P50 solar data. The 50% terminal reserve target and slot-aligned execution remain unchanged.
+
+Release discovery, tagged downloads and startup verification now default to `markgraham924/batpred-alphaess`. Home Assistant links to the offered fork release, rather than an upstream URL containing a fork-only tag.
+
+Validation: offline release-card, seven-day coverage, forecast, slot execution and terminal-target regressions pass. The GitNexus Windows runner failed during native dependency installation; direct call-site inspection and scoped diff review were used instead.

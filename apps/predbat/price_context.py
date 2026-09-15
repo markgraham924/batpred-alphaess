@@ -48,7 +48,7 @@ def context_curve(rows, reserve, capacity, charge_kw=3.68, discharge_kw=3.68, ef
     return [costs[0] - value for value in costs]
 
 
-def parse_context(snapshot, boundary, now, maximum_minutes=2160):
+def parse_context(snapshot, boundary, now, maximum_minutes=8640):
     """Accept only contiguous, fresh timestamped rows; stop at any coverage gap."""
     issued = datetime.fromisoformat(snapshot["issued_at"].replace("Z", "+00:00"))
     if issued.tzinfo is None or not timedelta(0) <= now - issued <= timedelta(hours=6):
@@ -99,15 +99,35 @@ def prepare_context(p):
         from forecast_dispatch import build_model, continuation_load
 
         loads = {minute: continuation_load(p, minute) for minute in range(0, p.forecast_minutes, 5)}
+        # The ordinary solar component currently packs four days. Supplement only
+        # its uncovered minutes from the configured, already-dampened HA Solcast
+        # forecasts. Never replace the near-term calibrated minute series.
+        extra_pv = {}
+        for entity in p.get_arg("optimise_context_pv_sources", [], indirect=False):
+            for entry in p.get_state_wrapper(entity, attribute="detailedForecast", default=[]) or []:
+                start = datetime.fromisoformat(entry["period_start"].replace("Z", "+00:00"))
+                power = float(entry["pv_estimate"])
+                if start.tzinfo is None or not math.isfinite(power) or power < 0:
+                    raise ValueError("Invalid continuation solar forecast")
+                minute = int((start - p.midnight_utc).total_seconds() / 60)
+                for offset in range(30):
+                    extra_pv[minute + offset] = power / 60
+        if not p.pv_forecast_minute:
+            raise ValueError("No primary solar forecast")
         usable = []
+        zero_solar_minutes = 0
         absolute = p.optimise_price_boundary
         for row in rows:
             duration = row["minutes"]
             relative = absolute - p.minutes_now
-            if duration % 5 or any(m not in loads for m in range(relative, relative + duration, 5)) or any(m not in p.pv_forecast_minute for m in range(absolute, absolute + duration)):
+            if duration % 5 or any(m not in loads for m in range(relative, relative + duration, 5)):
                 break
             row["load"] = sum(loads[m] for m in range(relative, relative + duration, 5))
-            row["pv"] = sum(p.pv_forecast_minute[m] for m in range(absolute, absolute + duration)) * p.inverter_loss
+            missing = sum(m not in p.pv_forecast_minute and m not in extra_pv for m in range(absolute, absolute + duration))
+            row["pv"] = sum(p.pv_forecast_minute.get(m, extra_pv.get(m, 0)) for m in range(absolute, absolute + duration)) * p.inverter_loss
+            row["pv_assumed_zero_minutes"] = missing
+            row["pv_source"] = "Conservative zero for uncovered minutes" if missing else "Available solar forecast"
+            zero_solar_minutes += missing
             usable.append(row)
             absolute += duration
         if not usable:
@@ -130,6 +150,9 @@ def prepare_context(p):
         p._price_context_curve = [0.75 * base + 0.25 * cautious for base, cautious in zip(nominal["curve"], downside["curve"])]
         p.price_context_rows = [dict(row, start=row["start"].isoformat(), end=row["end"].isoformat()) for row in usable]
         p.price_context_status = "Forecast simulation; not scheduled. Valuation: 75% nominal, 25% lower solar (-30%) and +2kWh demand. No value beyond final row."
+        p.price_context_status += " Six-day estimated continuation after the published-price window. Household load continues the existing daily profile."
+        if zero_solar_minutes:
+            p.price_context_status += " Solar unavailable for {:.1f} hours: conservatively assumed zero, not a weather forecast.".format(zero_solar_minutes / 60)
         if parameters["terminal_soc"]:
             p.price_context_status += " End target: at least {}% SoC where physically achievable.".format(parameters["terminal_soc"])
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as error:

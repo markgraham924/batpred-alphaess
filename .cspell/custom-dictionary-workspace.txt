@@ -351,6 +351,7 @@ luxpower
 malloc
 mallopt
 markdownlint
+markgraham
 matplotlib
 maximise
 maxrss
@@ -414,6 +415,7 @@ nobat
 nocharge
 nodischarge
 nohup
+nonfinite
 noopener
 nord
 nordpool
