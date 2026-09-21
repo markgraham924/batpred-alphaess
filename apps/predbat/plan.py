@@ -3532,6 +3532,11 @@ class Plan:
                 if self.export_limits_best[window_n] != EXPORT_LIMIT_IDLE:
                     continue
 
+                # Mode 19 blocks PV charging. At zero or negative export value,
+                # leave this slot in Normal so the battery can absorb the solar.
+                if all(self.rate_export.get(minute, 0) <= 0 for minute in range(window_start, window_end, PREDICT_STEP)):
+                    continue
+
                 # Don't freeze export where a charge is already planned - we can't charge the battery
                 # and freeze export (which disables charging) at the same time
                 hit_charge = self.hit_charge_window(self.charge_window_best, window_start, window_end)

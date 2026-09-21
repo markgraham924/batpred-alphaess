@@ -166,6 +166,7 @@ def alphaess_plan_mode(
     high_soc_policy_active=False,
     high_soc_enter=95.0,
     high_soc_exit=93.0,
+    export_rate=None,
 ):
     """Map one Predbat plan slot to the guarded AlphaESS controller mode.
 
@@ -184,6 +185,9 @@ def alphaess_plan_mode(
         return "EV Hold", "Hold battery while the car charges (Mode 2)", "#34DBEB", high_soc_policy_active
     if force_export_planned:
         return "Force Exp", "State of Charge Control discharge (Mode 2)", "#FFFF00", high_soc_policy_active
+    if export_rate is not None and export_rate <= 0:
+        return "Normal", "Normal Mode (5) - absorb solar at non-positive export price", "#FFFFFF", high_soc_policy_active
+
     if freeze_export_planned or high_soc_policy_active:
         reason = "Export excess solar (Mode 19)"
         if high_soc_policy_active and not freeze_export_planned:
@@ -1820,6 +1824,7 @@ class Output:
                     alphaess_high_soc_policy_active,
                     alphaess_high_soc_enter,
                     alphaess_high_soc_exit,
+                    self.rate_export.get(minute),
                 )
 
             towel_schedule = ""
