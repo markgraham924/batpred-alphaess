@@ -1,0 +1,13 @@
+# cspell:ignore PYTHONUNBUFFERED pathlib hashlib hexdigest iterdir
+# Build from repository root: docker build -f fixtures/Dockerfile.alphaess-lab .
+# Use only against the isolated lab HA and simulator network.
+FROM python:3.13-slim
+ENV PYTHONUNBUFFERED=1 PREDBAT_APPS_FILE=/config/apps.yaml
+COPY fixtures/alphaess-lab-runtime-requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+COPY apps/predbat /opt/predbat/apps/predbat
+# Local source manifest prevents startup from replacing candidate source online.
+RUN python -c "from pathlib import Path; import hashlib,yaml; root=Path('/opt/predbat/apps/predbat'); rows=[{'name':p.name,'size':p.stat().st_size,'sha':hashlib.sha1(('blob '+str(p.stat().st_size)+chr(0)).encode()+p.read_bytes()).hexdigest()} for p in sorted(root.iterdir()) if p.is_file() and p.name != 'manifest.yaml']; (root/'manifest.yaml').write_text(yaml.safe_dump(rows))"
+WORKDIR /config
+EXPOSE 5052
+CMD ["python", "/opt/predbat/apps/predbat/hass.py"]
