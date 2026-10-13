@@ -1,0 +1,7 @@
+# LAB ONLY: append these keys under pred_bat in templates/alphaess_local.yaml.
+# Remove template:true in that lab copy. Tariff examples are fictional.
+load_forecast_only: true
+load_forecast:
+  - sensor.alphaess_lab_load_forecast$results
+pv_forecast_today: sensor.alphaess_lab_pv_today
+pv_forecast_tomorrow: sensor.alphaess_lab_pv_tomorrow

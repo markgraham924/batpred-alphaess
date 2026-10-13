@@ -1,0 +1,75 @@
+# Portable AlphaESS local integration; confirm actual entity IDs after setup.
+# No AlphaESS cloud account, household scripts or separate Modbus YAML required.
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat
+  timezone: Europe/London
+  currency_symbols: ['£', 'p']
+  threads: 0
+  template: true  # Remove only after replacing the example tariff/forecast.
+  set_read_only: true
+  num_inverters: 1
+  inverter_type: AlphaESSController
+  soc_percent: [sensor.alphaess_battery_soc]
+  battery_power: [sensor.alphaess_battery_power]
+  battery_power_invert: [false]
+  pv_power: [sensor.alphaess_pv_power]
+  load_power: [sensor.alphaess_load_power]
+  grid_power: [sensor.alphaess_grid_power]
+  grid_power_invert: [false]
+  load_today: [sensor.alphaess_load_energy_today]
+  import_today: [sensor.alphaess_import_energy_today]
+  export_today: [sensor.alphaess_export_energy_today]
+  pv_today: [sensor.alphaess_pv_energy_today]
+  soc_max: [sensor.alphaess_battery_capacity]
+  reserve: [sensor.alphaess_effective_export_floor]
+  battery_min_soc: [sensor.alphaess_effective_export_floor]
+  battery_rate_max: [sensor.alphaess_max_power]
+  inverter_limit: [sensor.alphaess_max_power]
+  inverter_limit_charge: [sensor.alphaess_max_charge_power]
+  inverter_limit_discharge: [sensor.alphaess_max_discharge_power]
+  inverter_limit_charge_dc: [sensor.alphaess_max_charge_power]
+  inverter_reserve_max: 100
+  # Optional production-specific display columns intentionally disabled.
+  plan_alphaess_mode_column: false
+  plan_towel_schedule_column: false
+  charge_start_service:
+    - service: alphaess_local.charge_start
+      power: '{power}'
+      target_soc: '{target_soc}'
+      end_time: '{charge_end_time}'
+  charge_stop_service:
+    - service: alphaess_local.charge_stop
+      always: true
+  discharge_start_service:
+    - service: alphaess_local.discharge_start
+      power: '{power}'
+      target_soc: '{target_soc}'
+      end_time: '{discharge_end_time}'
+  discharge_freeze_service:
+    - service: alphaess_local.mode19_start
+      target_soc: '{target_soc}'
+      end_time: '{discharge_end_time}'
+  discharge_stop_service:
+    - service: alphaess_local.discharge_stop
+      always: true
+  # EXAMPLE ONLY: replace with your import/export tariff configuration.
+  rates_import:
+    - start: '00:00:00'
+      end: '06:00:00'
+      rate: 5
+    - start: '06:00:00'
+      end: '00:00:00'
+      rate: 30
+  rates_export:
+    - start: '00:00:00'
+      end: '16:00:00'
+      rate: 4
+    - start: '16:00:00'
+      end: '19:00:00'
+      rate: 45
+    - start: '19:00:00'
+      end: '00:00:00'
+      rate: 4

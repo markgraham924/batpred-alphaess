@@ -1,0 +1,42 @@
+# LAB ONLY: deterministic forecasts without accounts or external requests.
+# Merge under Home Assistant configuration.yaml or packages.
+template:
+  - sensor:
+      - name: AlphaESS Lab Load Forecast
+        unique_id: alphaess_lab_load_forecast
+        unit_of_measurement: kWh
+        state: 12
+        attributes:
+          results: >-
+            {% set ns = namespace(rows=[]) %}
+            {% set day = today_at('00:00') %}
+            {% for i in range(145) %}
+              {% set ns.rows = ns.rows + [{'last_updated': (day + timedelta(minutes=i*30)).isoformat(), 'energy': i * 0.25}] %}
+            {% endfor %}
+            {{ ns.rows }}
+      - name: AlphaESS Lab PV Today
+        unique_id: alphaess_lab_pv_today
+        unit_of_measurement: kWh
+        state: 6
+        attributes:
+          detailedForecast: >-
+            {% set ns = namespace(rows=[]) %}
+            {% set day = today_at('00:00') %}
+            {% for i in range(48) %}
+              {% set energy = 0.5 if 20 <= i < 32 else 0.0 %}
+              {% set ns.rows = ns.rows + [{'period_start': (day + timedelta(minutes=i*30)).isoformat(), 'pv_estimate': energy, 'pv_estimate10': energy * 0.8, 'pv_estimate90': energy * 1.2}] %}
+            {% endfor %}
+            {{ ns.rows }}
+      - name: AlphaESS Lab PV Tomorrow
+        unique_id: alphaess_lab_pv_tomorrow
+        unit_of_measurement: kWh
+        state: 6
+        attributes:
+          detailedForecast: >-
+            {% set ns = namespace(rows=[]) %}
+            {% set day = today_at('00:00') + timedelta(days=1) %}
+            {% for i in range(48) %}
+              {% set energy = 0.5 if 20 <= i < 32 else 0.0 %}
+              {% set ns.rows = ns.rows + [{'period_start': (day + timedelta(minutes=i*30)).isoformat(), 'pv_estimate': energy, 'pv_estimate10': energy * 0.8, 'pv_estimate90': energy * 1.2}] %}
+            {% endfor %}
+            {{ ns.rows }}
