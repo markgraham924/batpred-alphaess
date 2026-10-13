@@ -36,8 +36,10 @@ def validate_profiles(source):
         bins = value.get("energy_kwh")
         duration = value.get("duration_minutes")
         if (
-            not isinstance(duration, (int, float)) or not 20 <= duration <= 600
-            or not isinstance(bins, list) or len(bins) != math.ceil(duration / 30)
+            not isinstance(duration, (int, float))
+            or not 20 <= duration <= 600
+            or not isinstance(bins, list)
+            or len(bins) != math.ceil(duration / 30)
             or any(not isinstance(item, (int, float)) or not math.isfinite(item) or item < 0 for item in bins)
             or not 0.03 <= sum(bins) <= 8
         ):
@@ -72,9 +74,7 @@ def combined_rows(plan_rows, continuation_rows, now, horizon_hours=120):
             if start < now:
                 # The current partial slot cannot be scored at half-hour precision.
                 continue
-            row = {"start": start, "end": end, "minutes": (end - start).total_seconds() / 60,
-                   "import": values[0], "export": values[1], "load": values[2], "pv": values[3],
-                   "provenance": provenance}
+            row = {"start": start, "end": end, "minutes": (end - start).total_seconds() / 60, "import": values[0], "export": values[1], "load": values[2], "pv": values[3], "provenance": provenance}
             if row["minutes"] == 30:
                 rows.append(row)
     rows.sort(key=lambda item: item["start"])
@@ -99,20 +99,17 @@ def _score_window(model, path, start_index, bins):
     costs = [model["costs"][end_index]]
     for row in reversed(modified):
         following = costs[-1]
-        costs.append([min(choice["objective"] + interpolate(following, choice["energy"], reserve, capacity)
-                          for choice in options(row, level, *model["parameters"])) for level in levels])
+        costs.append([min(choice["objective"] + interpolate(following, choice["energy"], reserve, capacity) for choice in options(row, level, *model["parameters"])) for level in levels])
     costs.reverse()
     initial = path[start_index]["soc_start"] / 100 * capacity
-    objective = min(choice["objective"] + interpolate(costs[1], choice["energy"], reserve, capacity)
-                    for choice in options(modified[0], initial, *model["parameters"]))
+    objective = min(choice["objective"] + interpolate(costs[1], choice["energy"], reserve, capacity) for choice in options(modified[0], initial, *model["parameters"]))
     baseline = interpolate(model["costs"][start_index], initial, reserve, capacity)
 
     # Recover metered cost for the altered window and its changed battery state.
     energy = initial
     changed_bill = 0.0
     for index, row in enumerate(modified):
-        choice = min(options(row, energy, *model["parameters"]),
-                     key=lambda item: item["objective"] + interpolate(costs[index + 1], item["energy"], reserve, capacity))
+        choice = min(options(row, energy, *model["parameters"]), key=lambda item: item["objective"] + interpolate(costs[index + 1], item["energy"], reserve, capacity))
         changed_bill += choice["cost"]
         energy = choice["energy"]
     suffix = {"rows": model["rows"][end_index:], "costs": model["costs"][end_index:], "parameters": model["parameters"]}
@@ -141,14 +138,7 @@ def appliance_scenarios(plan_rows, continuation_rows, now, soc_kwh, parameters, 
             if finish > now + timedelta(hours=120):
                 break
             cost, bill = _score_window(model, path, index, bins)
-            provenance = "agilepredict_modelled" if any(row["provenance"] == "agilepredict_modelled" for row in rows[index:index + len(bins)]) else "eon_forecast"
-            candidates.append({"start": start.isoformat(), "finish": finish.isoformat(),
-                               "marginal_cost_p": cost, "bill_impact_p": bill, "provenance": provenance})
+            provenance = "agilepredict_modelled" if any(row["provenance"] == "agilepredict_modelled" for row in rows[index : index + len(bins)]) else "eon_forecast"
+            candidates.append({"start": start.isoformat(), "finish": finish.isoformat(), "marginal_cost_p": cost, "bill_impact_p": bill, "provenance": provenance})
         results[name] = {**profile, "candidates": candidates}
-    return {"version": 1, "generated_at": datetime.now(timezone.utc).isoformat(),
-            "horizon_end": rows[-1]["end"].isoformat(),
-            "forecast_intervals": [
-                {"start": row["start"].isoformat(), "provenance": row["provenance"]}
-                for row in rows
-            ],
-            "profiles": results}
+    return {"version": 1, "generated_at": datetime.now(timezone.utc).isoformat(), "horizon_end": rows[-1]["end"].isoformat(), "forecast_intervals": [{"start": row["start"].isoformat(), "provenance": row["provenance"]} for row in rows], "profiles": results}

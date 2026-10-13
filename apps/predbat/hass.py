@@ -4,6 +4,18 @@ Provides the Hass class that emulates the AppDaemon interface for standalone
 execution, including YAML configuration loading, secret management, log
 rotation, scheduled callback execution, and file change detection for
 development hot-reload.
+
+Despite the "outside AppDaemon" framing (legacy naming, kept for history), this
+IS the class predbat.PredBat actually inherits from in every currently
+supported install path - the Predbat app/addon and Docker both run this
+standalone-style loader, not a real appdaemon package. The genuinely
+AppDaemon-hosted install method has been retired (docs/install.md); there is
+no appdaemon dependency anywhere in this repo, and no conditional import
+branches to a different hass module. So Hass.log() below - and the write-time
+secret redaction in it (GH#4770) - is not a partial mitigation that misses an
+AppDaemon-hosted population still running elsewhere: there is no such
+population left to miss. Flagging this explicitly because the class/module
+docstrings alone would lead a reviewer to (reasonably) suspect the opposite.
 """
 
 import yaml
@@ -11,6 +23,9 @@ import sys
 import asyncio
 import os
 import subprocess
+
+from log_secrets import LogRedaction
+from utils import redact_log_line
 
 
 def write_git_version_marker():
@@ -36,7 +51,7 @@ def write_git_version_marker():
 write_git_version_marker()
 
 import predbat
-from utils import load_apps_yaml
+from utils import load_apps_yaml, predbat_log_count, predbat_log_name, rotate_predbat_logs
 import time
 from datetime import datetime, timedelta
 from multiprocessing import set_start_method
@@ -169,18 +184,26 @@ if __name__ == "__main__":
     sys.exit(0)
 
 
-class Hass:
+class Hass(LogRedaction):
     """Standalone mode wrapper emulating the AppDaemon interface.
 
     Enables PredBat to run outside Home Assistant/AppDaemon with YAML
     config loading, secret management, log rotation, scheduled callbacks,
     and file change detection for development hot-reload.
+
+    log()'s credential-redaction cache lives in LogRedaction (log_secrets.py) rather
+    than here, so it carries its own state and needs nothing from this __init__
+    (GH#5169).
     """
 
     def log(self, msg, quiet=True):
         """
         Log a message to the logfile
         """
+        # Redacted here, at the point the line is written, not at serve/download time: some users
+        # copy predbat.log directly off a Samba share exposing the addon's config directory,
+        # bypassing every HTTP/MCP endpoint a download-time scrub could sit behind (GH#4770).
+        msg = redact_log_line(str(msg), self._log_secret_pattern())
         message = "{}: {}\n".format(datetime.now(), msg)
         self.logfile.write(message)
         self.logfile.flush()
@@ -188,21 +211,17 @@ class Hass:
         if not quiet or msg_lower.startswith("error") or msg_lower.startswith("warn") or msg_lower.startswith("info"):
             print(message, end="")
 
-        # maximum number of historic logfiles to retain
-        max_logs = 9
+        # Total logfiles to keep including the live one, so max_logs rotated copies.
+        max_logs = predbat_log_count(self.args) - 1
 
         log_size = self.logfile.tell()
         if log_size > 10000000 and threading.current_thread() is threading.main_thread():
             # Only rotate from the main thread to avoid race conditions with
             # component threads that also call log().
-            for num_logs in range(max_logs - 1, 0, -1):
-                filename = "predbat." + format(num_logs) + ".log"
-                if os.path.isfile(filename):
-                    newfile = "predbat." + format(num_logs + 1) + ".log"
-                    os.rename(filename, newfile)
+            rotate_predbat_logs(max_logs)
 
             self.logfile.close()
-            os.rename("predbat.log", "predbat.1.log")
+            os.rename("predbat.log", predbat_log_name(1))
             self.logfile = open("predbat.log", "w")
 
     async def run_in_executor(self, callback, *args):
@@ -264,6 +283,10 @@ class Hass:
         except yaml.YAMLError as exc:
             print(exc)
             sys.exit(1)
+
+        # Both args and secrets have just been populated, so the redaction pattern built from them
+        # (GH#4770) is stale - drop it so the next log() call rebuilds from the loaded config.
+        self._invalidate_log_secret_pattern()
 
     def run_every(self, callback, next_time, run_every, **kwargs):
         """

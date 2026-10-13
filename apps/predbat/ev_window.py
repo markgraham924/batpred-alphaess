@@ -5,8 +5,7 @@ import math
 
 def override_state(base, car_n):
     """Read a stable fingerprint of the selected schedule, excluding live power."""
-    return tuple(str(base.get_arg(key, "off" if key.endswith("enabled") else "", index=car_n)).lower()
-                 for key in ("car_charging_override_enabled", "car_charging_override_start", "car_charging_override_end"))
+    return tuple(str(base.get_arg(key, "off" if key.endswith("enabled") else "", index=car_n)).lower() for key in ("car_charging_override_enabled", "car_charging_override_start", "car_charging_override_end"))
 
 
 def fixed_car_plan(base, car_n):
@@ -49,8 +48,7 @@ def fixed_car_plan(base, car_n):
         kwh = min(rate * (stop - cursor) / 60, remaining / loss)
         stop = min(stop, math.ceil(cursor + kwh / rate * 60))
         price = base.rate_import.get(int(cursor), base.rate_min)
-        plan.append({"start": cursor, "end": stop, "kwh": round(kwh, 3), "average": price,
-                     "cost": round(price * kwh, 2), "octopus": False, "manual": True})
+        plan.append({"start": cursor, "end": stop, "kwh": round(kwh, 3), "average": price, "cost": round(price * kwh, 2), "octopus": False, "manual": True})
         remaining = max(0.0, remaining - kwh * loss)
         cursor = stop
     return plan

@@ -1,5 +1,34 @@
 # Predbat
 
+This is Mark's AlphaESS fork. The `v9.3.8-alphaess.5` candidate incorporates
+upstream main through `1faff228` (13 October 2026), while retaining the deployed
+custom behaviour. The custom suffix distinguishes this build from upstream.
+
+The guarded `AlphaESSController` Home Assistant integration remains the owner of
+inverter commands. The BMW/OCPP Home Assistant package remains the charger owner.
+Supplier control must not be enabled as a side effect of an upstream merge.
+
+The retained patches cover native E.ON Optimise prices and coverage guards;
+published-price execution boundaries; bounded future battery valuation;
+seven-day forecast context with an optional terminal target; slot-aligned
+planning and execution checks; fixed EV overrides; solar/export preferences;
+explicit freeze at full charge; high-SOC Mode 19 removal; AlphaESS charge and
+discharge limit annotations; towel and EV history; car end-of-period SOC;
+appliance cost scenarios; usable-capacity chart corrections; Kraken coverage
+metadata; the dormant proxy helper; and this fork's update source.
+
+Estimated forecast rows influence boundary valuation but are not executable
+windows. The 50% continuation target is separate from the controller's 9%
+forced-export soft floor and at least 6% household protection. An armed expired
+EV override remains paused until explicitly cancelled.
+
+Compatibility regressions run from `coverage` with
+`python -m unittest discover -s ../experiments -p 'test_*.py'`, alongside the
+normal quick suite and kernel parity tests. The fork's random-plan baseline
+deliberately differs in scenarios 6 and 17: protecting a freeze destination from
+export swaps retains the owner's solar-routing preference. A control with only
+that guard removed matches all 20 upstream scenarios across 320 fields.
+
 ![image](https://github.com/springfall2008/batpred/actions/workflows/code-quality.yml/badge.svg)
 ![image](https://github.com/springfall2008/batpred/actions/workflows/publish-docs.yml/badge.svg)
 ![image](https://github.com/springfall2008/batpred/actions/workflows/pages/pages-build-deployment/badge.svg)

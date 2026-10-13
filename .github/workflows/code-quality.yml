@@ -29,6 +29,11 @@ jobs:
         cd coverage
         python3 ../apps/predbat/verify_kernel_binary.py ../apps/predbat/prediction_kernel_lib_x86_64.so
 
+    - name: Verify custom fork preservation
+      run: |
+        cd coverage
+        python3 -m unittest discover -s ../experiments -p 'test_*.py'
+
   # Cross-build the prediction kernel binaries for every platform and commit them
   # back to the PR branch when they change (same auto-fix pattern as pre-commit)
   kernel-binaries:
