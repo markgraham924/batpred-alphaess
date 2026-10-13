@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps/predbat"))
 from price_context import context_curve, parse_context, context_html
 from proxy_context import map_proxy
 from types import SimpleNamespace
+import predbat  # noqa: F401 (initialise circular orchestrator/config imports)
 from plan import prepare_terminal_curve
 
 

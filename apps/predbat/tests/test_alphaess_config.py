@@ -165,28 +165,26 @@ def test_alphaess_apps_schema_keys():
 
 
 def test_alphaess_plan_mode_mapping():
-    """Plan labels follow controller priority and high-SoC hysteresis."""
+    """Explicit actions retain priority; high SoC never invents a Mode 19 request."""
     cases = [
-        # charge, car, force export, freeze export, SoC, previous high-SoC, label, resulting high-SoC
-        (True, True, True, True, 100, False, "Force Chg", True),
-        (False, True, True, True, 80, False, "EV Hold", False),
-        (False, False, True, True, 80, False, "Force Exp", False),
-        (False, False, False, True, 80, False, "Mode 19", False),
-        (False, False, False, False, 95, False, "Mode 19", True),
-        (False, False, False, False, 94, True, "Mode 19", True),
-        (False, False, False, False, 92, True, "Normal", False),
+        # charge, car, force export, freeze export, export price, mode
+        (True, True, True, True, 20, "Force Chg"),
+        (False, True, True, True, 20, "EV Hold"),
+        (False, False, True, True, 20, "Force Exp"),
+        (False, False, False, True, 20, "Mode 19"),
+        (False, False, False, True, 0, "Normal"),
+        (False, False, False, True, -2, "Normal"),
+        (False, False, False, False, 20, "Normal"),
     ]
-    for charge, car, force_export, freeze_export, soc, prior_high_soc, expected_mode, expected_high_soc in cases:
-        mode, _title, _color, high_soc = alphaess_plan_mode(
+    for charge, car, force_export, freeze_export, price, expected_mode in cases:
+        mode, _title, _color = alphaess_plan_mode(
             charge,
             car,
             force_export,
             freeze_export,
-            soc,
-            prior_high_soc,
+            price,
         )
         assert mode == expected_mode
-        assert high_soc is expected_high_soc
 
 
 def test_towel_schedule_plan_column_mapping():

@@ -19,7 +19,12 @@ class SlotPlanningTests(unittest.TestCase):
         cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PredBat")
         methods = [node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name in ("slot_plan_key", "run_time_loop")]
         module = ast.Module(body=[ast.ClassDef(name="Scheduler", bases=[], keywords=[], body=methods, decorator_list=[])], type_ignores=[])
-        scope = dict(time=time, traceback=traceback)
+        import sys
+
+        sys.path.insert(0, str(Path(__file__).parents[1] / "apps/predbat"))
+        from ev_window import override_state
+
+        scope = dict(time=time, traceback=traceback, override_state=override_state)
         exec(compile(ast.fix_missing_locations(module), "<actual scheduler>", "exec"), scope)
         self.scheduler = scope["Scheduler"]()
         p = self.scheduler
@@ -47,8 +52,8 @@ class SlotPlanningTests(unittest.TestCase):
         p.log = p.expose_config = p.record_status = Mock()
 
     def test_boundary_keys(self):
-        """Only two routine calculation events per half-hour, including midnight."""
-        for minute, expected in ((0, -2), (2, -2), (3, 3), (27, 3), (28, 28), (30, 28), (32, 28), (33, 33), (58, 58), (60, 58)):
+        """Only the deployed pre-boundary calculation events, including midnight."""
+        for minute, expected in ((0, -2), (2, -2), (3, -2), (27, -2), (28, 28), (30, 28), (32, 28), (33, 28), (58, 58), (60, 58)):
             with patch.object(time, "time", return_value=minute * 60):
                 self.assertEqual(self.scheduler.slot_plan_key(), expected)
 

@@ -126,4 +126,6 @@ def publish_continuation(p, initial, cost):
     except (ValueError, TypeError):
         p.log("Forecast display unavailable: invalid boundary state")
         return []
-    return [dict(row, start=row["start"].isoformat(), end=row["end"].isoformat()) for row in rows]
+    # Display every continuation row in the main plan's configured timezone.
+    zone = p.midnight_utc.tzinfo
+    return [dict(row, start=row["start"].astimezone(zone).isoformat(), end=row["end"].astimezone(zone).isoformat()) for row in rows]
