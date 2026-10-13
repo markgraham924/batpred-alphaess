@@ -44,6 +44,10 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 import copy
 
 
+class EonOptimisePriceUnavailable(ValueError):
+    """Signal an E.ON price guard so the planning cycle can stop cleanly."""
+
+
 class Fetch:
     """Data fetching mixin for loading energy rates, consumption, and forecasts.
 
@@ -941,6 +945,13 @@ class Fetch:
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
         """
+        if self.get_arg("eon_optimise_enable", False) and not self.get_arg("eon_optimise_observe_only", False):
+            from eon_optimise import validate_planner_source
+
+            try:
+                validate_planner_source(self)
+            except ValueError as exc:
+                raise EonOptimisePriceUnavailable(str(exc)) from exc
 
         prev_octopus_slots = self.octopus_slots.copy()
         prev_octopus_saving_slots = self.octopus_saving_slots.copy()
@@ -1091,6 +1102,8 @@ class Fetch:
             # Octopus import rates
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
             import_rates = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
+            if self.get_arg("eon_optimise_enable", False) and not self.get_arg("eon_optimise_observe_only", False) and self.minutes_now not in import_rates:
+                raise EonOptimisePriceUnavailable("E.ON Optimise: current import sensor price unavailable")
             if not import_rates:
                 self.log("Error: metric_octopus_import is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_octopus_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
@@ -1167,6 +1180,8 @@ class Fetch:
             # Octopus export rates
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
             export_rates = self.fetch_octopus_rates(entity_id)
+            if self.get_arg("eon_optimise_enable", False) and not self.get_arg("eon_optimise_observe_only", False) and self.minutes_now not in export_rates:
+                raise EonOptimisePriceUnavailable("E.ON Optimise: current export sensor price unavailable")
             if not export_rates:
                 self.log("Warning: metric_octopus_export is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_octopus_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
@@ -1236,7 +1251,7 @@ class Fetch:
             # out of it - battery_value_rate needs the tariff's own export price, not an event price
             self.rate_export_max_forward = self.rate_export_max_forward_calc(self.rate_export_base)
             # For export tariff only load the saving session if enabled
-            if self.rate_export_max > 0:
+            if self.rate_export_max > 0 and self.get_arg("octopus_saving_session_export", True):
                 self.load_saving_slot(self.octopus_saving_slots, export_rates, export=True, rate_replicate=self.rate_export_replicated)
             load_axle_slot(self, self.axle_sessions, export_rates, export=True, rate_replicate=self.rate_export_replicated)
             export_rates = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", export_rates, self.rate_export_replicated)

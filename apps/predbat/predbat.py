@@ -21,6 +21,7 @@ import copy
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from ev_window import override_state
 import traceback
 import gc
 import random
@@ -85,7 +86,7 @@ from components import Components, COMPONENT_LIST
 from execute import Execute
 from marginal import Marginal
 from plan import Plan
-from fetch import Fetch
+from fetch import Fetch, EonOptimisePriceUnavailable
 from output import Output
 from userinterface import UserInterface
 from compare import Compare
@@ -1034,7 +1035,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         self.expose_config("active", True)
         self.fetch_config_options()
-        sensor_force_replan = self.fetch_sensor_data()
+        try:
+            sensor_force_replan = self.fetch_sensor_data()
+        except EonOptimisePriceUnavailable as exc:
+            self.log("Warn: " + str(exc))
+            self.record_status(message=str(exc), had_errors=True)
+            return
 
         # Check if any sensor changes require a replan
         if sensor_force_replan:
@@ -2132,10 +2138,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
     @staticmethod
     def slot_plan_key():
-        """Latest :28/:58 pre-boundary or :03/:33 post-boundary planning event."""
+        """Latest :28/:58 pre-boundary planning event."""
         minute = int(time.time() // 60)
         block = minute // 30 * 30
-        return max(event for event in (block - 2, block + 3, block + 28) if event <= minute)
+        return block + 28 if minute >= block + 28 else block - 2
 
     def run_time_loop(self, cb_args):
         """
@@ -2163,7 +2169,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     self.update_time()
                     key = self.slot_plan_key()
                     full_plan = config_changed or not self.plan_valid or key != getattr(self, "_last_slot_plan_key", None)
-                    ev_state = tuple(str(self.get_arg("car_charging_planned", "no", index=car)).lower() for car in range(self.num_cars))
+                    ev_state = tuple((str(self.get_arg("car_charging_planned", "no", index=car)).lower(), override_state(self, car)) for car in range(self.num_cars))
                     if ev_state != getattr(self, "_slot_ev_state", None):
                         full_plan = True
                     # Midnight rebases minute-indexed windows before execution.

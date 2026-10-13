@@ -6749,12 +6749,15 @@ def get_plan_renderer_js():
                 state: "What the battery is doing this slot - hover a state cell for the specific reason.",
                 alphaess_mode: 'The physical mode the guarded AlphaESS controller is expected to apply this slot.',
                 towels: 'Price-capped towel-radiator runs selected by Home Energy Orchestrator for this slot.',
-                limit: 'The battery SoC Predbat is planning to reach by the end of this slot.',
+                limit: 'Planned action target: upper target for grid charge or lower target for forced export. It is not a persistent PV cap or household reserve.',
+                charge_limit: 'Grid charge target and solar charging permission under the AlphaESS controller. Hover each row for what happens to surplus solar.',
+                discharge_limit: 'Forced-export stop target and separate household floor. Uses current device floor; planned policy, not future hardware readback.',
                 pv: 'Predicted solar generation for this slot, from the Solcast forecast.',
                 load: 'Predicted house electricity consumption for this slot, from historical data.',
                 clip: "Solar energy predicted to be lost - the inverter can't handle all the PV generated, or an export limit is set.",
                 xload: 'Extra load added externally via load_forecast settings (e.g. PredAI, PredHeat).',
                 car: 'Predicted car charging energy for this slot.',
+                car_soc: 'Estimated car charge at the end of this period, including charging losses and target limit. Assumes no driving. Unknown means no valid charge reading.',
                 iboost: 'Energy planned for the solar diverter (iBoost, MyEnergi Eddi, etc) this slot.',
                 soc: 'Estimated battery state of charge at the start of this slot.',
                 cost: 'Estimated cost (or saving) for this slot.',
@@ -6782,7 +6785,11 @@ def get_plan_renderer_js():
             if (jsonData.towel_schedule_column) {
                 html += th('towels', 'Towels');
             }
-            html += th('limit', 'Limit %');
+            html += th('limit', jsonData.alphaess_mode_column ? 'Plan target %' : 'Limit %');
+            if (jsonData.alphaess_mode_column) {
+                html += th('charge_limit', 'Charge limit %');
+                html += th('discharge_limit', 'Discharge limit %');
+            }
             html += showDebug ? th('pv', 'PV kWh (10%)') : th('pv', 'PV kWh');
             html += showDebug ? th('load', 'Load kWh (10%)') : th('load', 'Load kWh');
             if (showDebug) {
@@ -6793,6 +6800,7 @@ def get_plan_renderer_js():
             }
             if (jsonData.num_cars > 0) {
                 html += th('car', 'Car kWh');
+                html += th('car_soc', 'Car end %');
             }
             if (jsonData.iboost_enable) {
                 html += th('iboost', 'iBoost kWh');
@@ -6911,6 +6919,12 @@ def get_plan_renderer_js():
                     html += `<td${rowspanAttr} bgcolor=#FFFFFF> ${row.show_limit || ''}</td>`;
                 }
 
+                if (jsonData.alphaess_mode_column) {
+                    for (const key of ['charge_limit', 'discharge_limit']) {
+                        html += `<td bgcolor=#FFFFFF title="${escapeAttr(row[key + '_title'] || 'Policy not available in this saved plan')}">${escapeAttr(row[key] || 'Unknown')}</td>`;
+                    }
+                }
+
                 // PV forecast (with 10% value in brackets if debug mode)
                 let pvText = row.pv_forecast == 0 ? '&#9866;' : row.pv_forecast;
                 if (showDebug && row.pv_forecast10 > 0) {
@@ -6948,6 +6962,11 @@ def get_plan_renderer_js():
                 if (jsonData.num_cars > 0) {
                     const carVal = row.car_charging > 0 ? row.car_charging : '&#9866;';
                     html += `<td id=car bgcolor=${row.car_color || '#FFFFFF'}>${carVal}</td>`;
+                    const carSoc = row.car_charging > 0 ? Array.from({length: jsonData.num_cars}, (_, i) => {
+                        const value = row.car_soc_end_percent?.[i];
+                        return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? Math.round(value) + '%' : 'Unknown';
+                    }).join(' / ') : '';
+                    html += `<td id=car_soc title="Estimated at period end; assumes no driving">${carSoc}</td>`;
                 }
 
                 // iBoost (conditional)
@@ -7024,6 +7043,10 @@ def get_plan_renderer_js():
                 }
                 html += '<td></td>';
 
+                if (jsonData.alphaess_mode_column) {
+                    html += '<td></td><td></td>';
+                }
+
                 // PV forecast total
                 html += `<td bgcolor=#FFFFFF><b>${totals.pv_forecast || ''}</b></td>`;
 
@@ -7043,6 +7066,11 @@ def get_plan_renderer_js():
                 // Car charging (if enabled)
                 if (jsonData.num_cars > 0 && totals.car_charging !== undefined) {
                     html += `<td bgcolor=#FFFFFF><b>${totals.car_charging}</b></td>`;
+                    const carSoc = totals.car_charging > 0 ? Array.from({length: jsonData.num_cars}, (_, i) => {
+                        const value = totals.car_soc_end_percent?.[i];
+                        return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? Math.round(value) + '%' : 'Unknown';
+                    }).join(' / ') : '';
+                    html += `<td bgcolor=#FFFFFF><b>${carSoc}</b></td>`;
                 }
 
                 // iBoost (if enabled)

@@ -19,6 +19,7 @@ call to the C++ prediction kernel, which is where the threading now lives.
 """
 
 from datetime import datetime, timedelta
+from ev_window import fixed_car_plan
 from multiprocessing import cpu_count
 from const import CLOUD_FACTOR_PV10, CLOUD_WINDOW_MINUTES, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
 
@@ -3532,6 +3533,14 @@ class Plan:
                 if self.export_limits_best[window_n] != EXPORT_LIMIT_IDLE:
                     continue
 
+                # Mode 19 blocks PV charging. At zero or negative export value,
+                # leave this slot in Normal so the battery can absorb the solar.
+                if all(
+                    self.rate_export.get(minute, 0) <= 0
+                    for minute in range(window_start, window_end, PREDICT_STEP)
+                ):
+                    continue
+
                 # Don't freeze export where a charge is already planned - we can't charge the battery
                 # and freeze export (which disables charging) at the same time
                 hit_charge = self.hit_charge_window(self.charge_window_best, window_start, window_end)
@@ -5537,6 +5546,10 @@ class Plan:
         """
         Plan when the car will charge, taking into account ready time and pricing
         """
+        fixed = fixed_car_plan(self, car_n)
+        if fixed is not None:
+            return fixed
+
         plan = []
         car_soc = self.car_charging_soc[car_n]
         max_price = self.car_charging_plan_max_price[car_n]

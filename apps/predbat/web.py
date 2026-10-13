@@ -3534,8 +3534,24 @@ chart.render();
                         degradation_hist[today_key] = float(cur_attrs["degradation_percent"])
                     except (ValueError, TypeError):
                         pass
+                # The stored sensor attributes reflect the capacity configured when
+                # each daily sample was recorded. A corrected usable-capacity setting
+                # must also correct the chart's historical comparison immediately.
+                current_nominal = self.base.get_arg("soc_max", index=inv_id, default=0.0)
+                try:
+                    current_nominal = float(current_nominal)
+                except (ValueError, TypeError):
+                    current_nominal = 0
+                if current_nominal > 0:
+                    sample_days = set(calculated_hist) | set(nominal_hist)
+                    nominal_hist = {day: current_nominal for day in sample_days}
+                    degradation_hist = {
+                        day: round((current_nominal - float(size)) / current_nominal * 100, 2)
+                        for day, size in calculated_hist.items()
+                        if size is not None
+                    }
                 colors = inv_colors[inv_id % len(inv_colors)]
-                nominal_name = "Nominal{}".format(label_suffix)
+                nominal_name = "Usable baseline{}".format(label_suffix)
                 calculated_name = "Calculated{}".format(label_suffix)
                 degradation_name = "Degradation%{}".format(label_suffix)
                 series_data.append({"name": nominal_name, "data": nominal_hist, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": colors[0], "unit": "kWh"})

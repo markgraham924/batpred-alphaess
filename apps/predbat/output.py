@@ -65,6 +65,26 @@ TOWEL_ACTUAL_ENTITIES = (
 )
 
 
+
+def car_soc_at_time(curves, stamp, valid):
+    """Read exact model samples; never invent a value for a missing/invalid anchor."""
+    values = []
+    for index, allowed in enumerate(valid):
+        value = curves[index].get(stamp) if allowed and index < len(curves) else None
+        try:
+            value = float(value)
+            value = round(value, 1) if math.isfinite(value) and 0 <= value <= 100 else None
+        except (TypeError, ValueError):
+            value = None
+        values.append(value)
+    return values
+
+
+def car_soc_text(values):
+    """Label each car separately, including unknown anchors."""
+    return " / ".join("Unknown" if value is None else "{}%".format(math.floor(value + 0.5)) for value in values)
+
+
 def _history_timestamp(record):
     """Return one Home Assistant history record's timestamp, if valid."""
     value = record.get("last_updated", record.get("last_changed"))
@@ -162,34 +182,85 @@ def alphaess_plan_mode(
     car_planned,
     force_export_planned,
     freeze_export_planned,
-    soc_percent,
-    high_soc_policy_active=False,
-    high_soc_enter=95.0,
-    high_soc_exit=93.0,
+    export_rate=None,
 ):
-    """Map one Predbat plan slot to the guarded AlphaESS controller mode.
+    """Map explicit plan actions to the guarded controller's physical mode.
 
-    The priority matches ``predbat_alphaess.models.desired_state``.  The
-    high-SoC flag is returned so callers can carry the controller's hysteresis
-    across consecutive plan rows.
+    High SoC does not request Mode 19: normal mode must remain able to absorb
+    solar up to 100%. Only a planned freeze disables PV charging.
     """
-    if soc_percent >= high_soc_enter:
-        high_soc_policy_active = True
-    elif soc_percent < high_soc_exit:
-        high_soc_policy_active = False
-
     if charge_planned:
-        return "Force Chg", "State of Charge Control (Mode 2)", "#3AEE85", high_soc_policy_active
+        return "Force Chg", "State of Charge Control (Mode 2)", "#3AEE85"
     if car_planned:
-        return "EV Hold", "Hold battery while the car charges (Mode 2)", "#34DBEB", high_soc_policy_active
+        return "EV Hold", "Hold battery while the car charges (Mode 2)", "#34DBEB"
     if force_export_planned:
-        return "Force Exp", "State of Charge Control discharge (Mode 2)", "#FFFF00", high_soc_policy_active
-    if freeze_export_planned or high_soc_policy_active:
-        reason = "Export excess solar (Mode 19)"
-        if high_soc_policy_active and not freeze_export_planned:
-            reason += " - high-SoC anti-curtailment policy"
-        return "Mode 19", reason, "#AAAAAA", high_soc_policy_active
-    return "Normal", "Normal Mode (5)", "#FFFFFF", high_soc_policy_active
+        return "Force Exp", "State of Charge Control discharge (Mode 2)", "#FFFF00"
+    if export_rate is not None and export_rate <= 0:
+        return "Normal", "Normal Mode (5) - absorb solar at non-positive export price", "#FFFFFF"
+    if freeze_export_planned:
+        return "Mode 19", "Export excess solar (Mode 19)", "#AAAAAA"
+    return "Normal", "Normal Mode (5)", "#FFFFFF"
+
+
+def alphaess_plan_limits(mode, charge_target, export_target, soc_percent, floor_readback, pv_readback=100):
+    """Describe planned SOC limits under the native controller's existing rules.
+
+    Grid charge targets are not persistent PV caps. Export targets are not
+    household reserves. Unknown device floors must remain explicitly unknown.
+    These are policy annotations, not hardware readback for future/history rows.
+    """
+    try:
+        floor = float(floor_readback)
+        if not math.isfinite(floor) or not 0 <= floor <= 100:
+            raise ValueError("Invalid discharge floor")
+        floor = max(6.0, floor)
+    except (TypeError, ValueError):
+        floor = None
+    house = "House {}%".format(dp2(floor)) if floor is not None else "House unknown"
+    try:
+        pv = float(pv_readback)
+        if not math.isfinite(pv) or not 0 <= pv <= 100:
+            raise ValueError("Invalid solar charge cutoff")
+    except (TypeError, ValueError):
+        pv = None
+    pv_text = "{:g}%".format(pv) if pv is not None else "unknown"
+    charge = "PV {} ({})".format(pv_text, "no plan cap" if pv == 100 else "device cap" if pv is not None else "cutoff unavailable")
+    charge_title = (
+        "Normal permits surplus solar above the forecast or grid charge target, up to the current device charging cutoff ({}). "
+        "Surplus beyond battery/power limits is exported subject to inverter limits. Future/history rows use current cutoff readback."
+    ).format(pv_text)
+    discharge = house
+    discharge_title = "Household discharge uses the current device floor (at least 6%). This is separate from any forced-export target; future and history rows are policy estimates, not observed limits."
+    grid = None
+    export = None
+    if mode == "Force Chg":
+        grid = charge_target
+        charge = "Grid {}% / PV {}".format(dp2(grid), pv_text)
+        charge_title = "Forced grid charge stops at {}%. The controller then returns to Normal (or EV hold if required), so solar can charge above this target up to the device cutoff ({}); this is not a hard PV cap.".format(dp2(grid), pv_text)
+        discharge = "Held; then " + house
+        discharge_title = "Forced charge takes priority until its target/end. After returning to Normal, " + discharge_title
+    elif mode == "EV Hold":
+        charge = "Hold {}%".format(soc_percent)
+        pv = None
+        charge_title = "Mode 2 holds the battery at the SOC when the EV hold starts. This row's SOC is a forecast; the actual target uses live SOC. Normal solar charging resumes when the EV hold ends."
+        discharge = "Held (EV); then " + house
+        discharge_title = "EV hold prevents the battery supplying car demand. After the hold, " + discharge_title
+    elif mode == "Force Exp":
+        export = max(9.0, float(int(export_target)), floor) if floor is not None else None
+        charge = "PV {} after export".format(pv_text)
+        charge_title = (
+            "Mode 2 prioritises forced discharge while active. On reaching the export target or end time, the controller returns to Normal "
+            "(or EV hold if required) and surplus solar may charge up to the device cutoff ({}). There is no persistent plan PV cap."
+        ).format(pv_text)
+        discharge = ("Export {}% / ".format(dp2(export)) if export is not None else "Export blocked (floor unknown) / ") + house
+        discharge_title = "Forced export stops at the highest of its command target, 9% soft floor and current device floor. Normal house use may then continue to its separate floor. " + discharge_title
+    elif mode == "Mode 19":
+        charge = "PV blocked"
+        pv = None
+        charge_title = "Mode 19 blocks battery charging at any SOC. Surplus PV goes to export subject to inverter/export limits. This is a charging block, not PV generation clipping or a numeric SOC cap."
+    return dict(charge_limit=charge, charge_limit_title=charge_title, discharge_limit=discharge,
+                discharge_limit_title=discharge_title, grid_charge_target_percent=grid,
+                pv_charge_cap_percent=pv, forced_export_floor_percent=export, house_discharge_floor_percent=floor)
 
 
 def more_active_slot_status(current, candidate, precedence):
@@ -774,9 +845,11 @@ class Output:
         html += "<th colspan=2><b>State</b></th>"  # state can potentially be two cells for charging and exporting in the same slot
         if alphaess_mode_column:
             html += "<th><b>AlphaESS mode</b></th>"
+        html += "<th><b>{}</b></th>".format("Plan target %" if alphaess_mode_column else "Limit %")
+        if alphaess_mode_column:
+            html += "<th><b>Charge limit %</b></th><th><b>Discharge limit %</b></th>"
         if towel_schedule_column:
             html += "<th><b>Towels</b></th>"
-        html += "<th><b>Limit %</b></th>"
         if plan_debug:
             html += "<th><b>PV kWh (10%)</b></th>"
             html += "<th><b>Load kWh (10%)</b></th>"
@@ -788,6 +861,7 @@ class Output:
             html += "<th><b>XLoad kWh</b></th>"
         if self.num_cars > 0:
             html += "<th><b>Car kWh</b></th>"
+            html += '<th title="Estimated car charge at the end of this period; assumes no driving"><b>Car end %</b></th>'
         if self.iboost_enable:
             html += "<th><b>iBoost kWh</b></th>"
         html += "<th><b>SoC %</b></th>"
@@ -1233,10 +1307,12 @@ class Output:
                 for towel_label, towel_entity in TOWEL_SCHEDULE_ENTITIES:
                     towel_blocks = self.get_state_wrapper(towel_entity, attribute="blocks", default=[])
                     towel_schedules.append((towel_label, towel_blocks))
+        alphaess_floor_readback = None
+        alphaess_pv_readback = None
+        if alphaess_mode_column:
+            alphaess_floor_readback = self.get_state_wrapper("sensor.alphaess_discharging_cutoff_soc", default=None)
+            alphaess_pv_readback = self.get_state_wrapper("sensor.alphaess_charging_cutoff_soc", default=None)
         alphaess_ev_hold_minutes_override = getattr(self, "_alphaess_ev_hold_minutes_override", None)
-        alphaess_high_soc_enter = float(self.get_arg("plan_alphaess_high_soc_enter", 95.0))
-        alphaess_high_soc_exit = float(self.get_arg("plan_alphaess_high_soc_exit", 93.0))
-        alphaess_high_soc_policy_active = False
         mode = self.predbat_mode
         if self.set_read_only:
             if self.set_read_only_axle:
@@ -1262,6 +1338,33 @@ class Output:
         load_total = 0
         xload_total = 0
         car_total = 0
+        car_prediction = prediction if prediction is not None else getattr(self, "prediction", None)
+        car_curves = copy.deepcopy(getattr(car_prediction, "predict_car_soc_time", []))
+        # The curve records step starts; the terminal value is saved separately.
+        car_terminal_minute = min(end_record, getattr(car_prediction, "forecast_minutes", self.forecast_minutes))
+        car_terminal_stamp = (self.midnight_utc + timedelta(minutes=self.minutes_now + car_terminal_minute)).strftime(TIME_FORMAT)
+        for car_n, final_kwh in enumerate(getattr(car_prediction, "final_car_soc", [])):
+            if car_n < len(car_curves) and car_n < len(self.car_charging_battery_size) and self.car_charging_battery_size[car_n] > 0:
+                car_curves[car_n].setdefault(car_terminal_stamp, final_kwh / self.car_charging_battery_size[car_n] * 100)
+        car_valid = [prediction is None] * self.num_cars
+        # A planning helper may use a 100% sentinel when its genuine source is stale.
+        # Do not present that sentinel as an actual or estimated charge level.
+        car_inputs = self.args.get("car_charging_soc", [])
+        if not isinstance(car_inputs, list):
+            car_inputs = [car_inputs]
+        for car_n, entity in enumerate(car_inputs[:self.num_cars]):
+            if not isinstance(entity, str) or "." not in entity:
+                continue
+            source = self.get_state_wrapper(entity, attribute="source_entity", default=None)
+            if source:
+                try:
+                    source_soc = float(self.get_state_wrapper(source, default=None))
+                    stamp = self.get_state_wrapper(source, attribute="timestamp", default=None)
+                    age = (self.now_utc_real - datetime.fromisoformat(stamp.replace("Z", "+00:00"))).total_seconds()
+                    car_valid[car_n] = car_valid[car_n] and math.isfinite(source_soc) and 0 <= source_soc <= 100 and 0 <= age < 86400
+                except (TypeError, ValueError, AttributeError):
+                    car_valid[car_n] = False
+        car_soc_end = [None] * self.num_cars
         raw_plan = {}
         raw_plan["rows"] = []
 
@@ -1732,6 +1835,8 @@ class Output:
             if self.num_cars > 0:
                 car_charging_kwh = self.car_charge_slot_kwh(minute_start, minute_end)
                 car_total += car_charging_kwh
+                car_end_stamp = (self.midnight_utc + timedelta(minutes=self.minutes_now + minute_relative_slot_end)).strftime(TIME_FORMAT)
+                car_soc_end = car_soc_at_time(car_curves, car_end_stamp, car_valid)
                 if car_charging_kwh > 0.0:
                     car_charging_str = str(car_charging_kwh)
                     car_color = "FFFF00"
@@ -1811,16 +1916,26 @@ class Output:
                     car_planned = self.num_cars > 0 and car_charging_kwh > 0.0
                 else:
                     car_planned = slot_has_flagged_minute(minute_start, minute_end, alphaess_ev_hold_minutes_override)
-                alphaess_mode, alphaess_mode_title, alphaess_mode_color, alphaess_high_soc_policy_active = alphaess_plan_mode(
+                alphaess_mode, alphaess_mode_title, alphaess_mode_color = alphaess_plan_mode(
                     charge_planned,
                     car_planned,
                     force_export_planned,
                     freeze_export_planned,
-                    soc_percent,
-                    alphaess_high_soc_policy_active,
-                    alphaess_high_soc_enter,
-                    alphaess_high_soc_exit,
+                    self.rate_export.get(minute),
                 )
+
+            alphaess_limits = None
+            if alphaess_mode_column:
+                charge_target = None
+                if charge_planned:
+                    charge_limit = self.charge_limit_best[charge_window_n]
+                    charge_target = soc_percent if self.is_freeze_charge(charge_limit) else calc_percent_limit(charge_limit, self.soc_max)
+                export_target = self.export_limits_best[export_window_n] if force_export_planned else None
+                if force_export_planned:
+                    export_target = max(int(export_target), math.ceil(getattr(self, "export_soft_floor_percent", 0)))
+                    if not self.set_reserve_enable:
+                        export_target = max(export_target, calc_percent_limit(max(self.reserve, self.best_soc_min), self.soc_max))
+                alphaess_limits = alphaess_plan_limits(alphaess_mode, charge_target, export_target, soc_percent, alphaess_floor_readback, alphaess_pv_readback)
 
             towel_schedule = ""
             towel_schedule_title = ""
@@ -1883,6 +1998,9 @@ class Output:
                 html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
             elif alphaess_mode_column:
                 html += '<td id=alphaess_mode bgcolor={} title="{}">{}</td>'.format(alphaess_mode_color, escape_html(alphaess_mode_title, quote=True), alphaess_mode)
+            if alphaess_mode_column:
+                for limit_key in ("charge_limit", "discharge_limit"):
+                    html += '<td bgcolor=#FFFFFF title="{}">{}</td>'.format(escape_html(alphaess_limits[limit_key + "_title"], quote=True), escape_html(alphaess_limits[limit_key]))
             if towel_schedule_column:
                 html += '<td id=towel_schedule bgcolor={} title="{}">{}</td>'.format(towel_schedule_color, escape_html(towel_schedule_title, quote=True), towel_schedule)
             html += "<td id=pv bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
@@ -1893,6 +2011,7 @@ class Output:
                 html += "<td id=extra bgcolor=" + extra_color + ">" + str(extra_forecast) + "</td>"
             if self.num_cars > 0:  # Don't display car charging data if there's no car
                 html += "<td id=car bgcolor=" + car_color + ">" + car_charging_str + "</td>"
+                html += '<td id=car_soc title="Estimated at period end; assumes no driving">' + (car_soc_text(car_soc_end) if car_charging_kwh > 0 else "") + "</td>"
             if self.iboost_enable:
                 html += "<td bgcolor=" + iboost_color + ">" + iboost_amount_str + " </td>"
             html += "<td id=soc data-minute=" + str(minute) + " bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
@@ -1927,6 +2046,7 @@ class Output:
                 json_row["alphaess_mode"] = alphaess_mode
                 json_row["alphaess_mode_title"] = alphaess_mode_title
                 json_row["alphaess_mode_color"] = alphaess_mode_color
+                json_row.update(alphaess_limits)
             if towel_schedule_column:
                 json_row["towel_schedule"] = towel_schedule
                 json_row["towel_schedule_title"] = towel_schedule_title
@@ -1984,6 +2104,8 @@ class Output:
                 json_row["extra_load_total"] = dp2(raw_extra_forecast_total)
                 json_row["extra_color"] = extra_color
             if self.num_cars > 0:
+                json_row["car_soc_end_percent"] = car_soc_end
+                json_row["car_soc_end_time"] = car_end_stamp
                 json_row["car_charging"] = car_charging_kwh
                 json_row["car_color"] = car_color
                 json_row["car_rate"] = car_rate
@@ -2024,6 +2146,8 @@ class Output:
         if towel_schedule_column:
             html += "<td></td>"
         html += "<td></td>"
+        if alphaess_mode_column:
+            html += "<td></td><td></td>"
         html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(pv_total))
         html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(load_total))
         if plan_debug:
@@ -2033,6 +2157,7 @@ class Output:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(xload_total))
         if self.num_cars > 0:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(car_total))
+            html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(car_soc_text(car_soc_end) if car_total > 0 else "")
         if self.iboost_enable:
             iboost_amount_str = "&#9866;"
             iboost_amount_end = self.predict_iboost_best.get(minute_relative_slot_end, 0)
@@ -2075,6 +2200,7 @@ class Output:
             totals["extra_load"] = dp2(xload_total)
         if self.num_cars > 0:
             totals["car_charging"] = dp2(car_total)
+            totals["car_soc_end_percent"] = car_soc_end
         totals["soc_percent"] = soc_percent_end
         if self.iboost_enable:
             totals["iboost"] = dp2(iboost_amount_end)
@@ -2088,8 +2214,40 @@ class Output:
 
         if publish:
             self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"text": self.text_plan, "html": html, "raw": raw_plan, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
+            self.publish_appliance_scenarios(raw_plan)
 
         return html, raw_plan
+
+    def publish_appliance_scenarios(self, raw_plan):
+        """Publish versioned, read-only appliance what-if costs without changing dispatch."""
+        entity_id = "sensor." + self.prefix + "_appliance_scenarios_v1"
+        try:
+            model = getattr(self, "_price_context_model", None)
+            if not self.get_arg("optimise_context_enable", False) or not model:
+                raise ValueError("Five-day forecast context is unavailable")
+            from appliance_scenarios import appliance_scenarios
+
+            cached = getattr(self, "_appliance_scenario_cache", None)
+            if cached and self.now_utc_real - cached[0] < timedelta(minutes=5):
+                payload = cached[1]
+            else:
+                reserve, capacity, charge_kw, discharge_kw, efficiency, wear, inverter_kw, export_kw = model["parameters"]
+                parameters = dict(
+                    reserve=reserve, capacity=capacity, charge_kw=charge_kw,
+                    discharge_kw=discharge_kw, efficiency=efficiency, wear=wear,
+                    inverter_kw=inverter_kw, export_kw=export_kw,
+                    terminal_soc=self.get_arg("optimise_context_terminal_soc", 0.0),
+                )
+                observed = self.get_state_wrapper("sensor.home_energy_orchestrator_appliance_profiles", attribute="profiles", default={})
+                payload = appliance_scenarios(
+                    raw_plan["rows"], raw_plan.get("forecast_context", []),
+                    self.now_utc_real, self.soc_kw, parameters, observed,
+                )
+                self._appliance_scenario_cache = (self.now_utc_real, payload)
+            self.dashboard_item(entity_id, state="ready", attributes=dict(payload, friendly_name="Appliance marginal cost scenarios", icon="mdi:chart-timeline-variant"))
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as error:
+            self.dashboard_item(entity_id, state="unavailable", attributes={"version": 1, "reason": str(error), "friendly_name": "Appliance marginal cost scenarios", "icon": "mdi:chart-timeline-variant"})
+
 
     def publish_rates(self, rates, export, gas=False):
         """
