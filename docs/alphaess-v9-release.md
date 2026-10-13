@@ -118,11 +118,14 @@ alone do not prove the full planning loop.
 
 ### Verification and licensing
 
-The candidate passes 39 fork experiment tests, including three portable local
+The candidate passes 40 fork experiment tests, including four portable local
 controller contract tests using the real `Inverter` implementation. It also
 passes the focused inverter, execute, AlphaESS configuration, export encoding and
 basic rate suites. Tests use different capacity, reserve and unequal charge and
-discharge limits to detect household defaults. Logs are retained in the lab
+discharge limits to detect household defaults. The grid sign test uses actual
+inverter readings, aggregate publication and dashboard import/export icons:
+the local integration reports positive import, while Predbat expects positive
+export, so `grid_power_invert: true` is required. Logs are retained in the lab
 workspace. Simulation does not establish compatibility with untested real
 inverter models or firmware.
 

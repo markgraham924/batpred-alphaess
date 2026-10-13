@@ -18,7 +18,8 @@ pred_bat:
   pv_power: [sensor.alphaess_pv_power]
   load_power: [sensor.alphaess_load_power]
   grid_power: [sensor.alphaess_grid_power]
-  grid_power_invert: [false]
+  # Integration +import; Predbat +export.
+  grid_power_invert: [true]
   load_today: [sensor.alphaess_load_energy_today]
   import_today: [sensor.alphaess_import_energy_today]
   export_today: [sensor.alphaess_export_energy_today]

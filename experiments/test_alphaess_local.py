@@ -2,12 +2,14 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 import yaml
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / "apps/predbat"))
 from unit_test import create_predbat
 from inverter import Inverter
+from web import WebInterface
 
 
 class AlphaESSLocalTests(unittest.TestCase):
@@ -48,7 +50,21 @@ class AlphaESSLocalTests(unittest.TestCase):
         self.assertAlmostEqual(self.inv.battery_rate_max_charge * 60000, 3000)
         self.assertAlmostEqual(self.inv.battery_rate_max_discharge * 60000, 5000)
         self.assertEqual(self.inv.battery_power, 800)
-        self.assertEqual(self.inv.grid_power, -400)
+        self.assertEqual(self.inv.grid_power, 400)
+
+    def test_grid_sign_through_dashboard(self):
+        """Actual inverter and aggregate publication label import and export correctly."""
+        self.p.inverters = [self.inv]
+        self.p.dashboard_index = ["test"]
+        web = SimpleNamespace(base=self.p)
+        for sensor_power, expected_power, icon in [(1200, -1200, "transmission-tower-import"), (-1800, 1800, "transmission-tower-export")]:
+            with self.subTest(sensor_power=sensor_power):
+                self.ha.dummy_items["sensor.alphaess_grid_power"] = sensor_power
+                self.p.fetch_inverter_data(quick=True)
+                self.assertEqual(self.p.grid_power, expected_power)
+                self.p.publish_inverter_data()
+                self.assertEqual(self.ha.get_state("predbat.grid_power"), expected_power / 1000)
+                self.assertIn(icon, WebInterface.get_grid_power_icon(web))
 
     def test_charge_export_and_freeze_payloads(self):
         """Real semantic calls preserve requested rates and window end times."""
