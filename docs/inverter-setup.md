@@ -4247,3 +4247,10 @@ Optional, defaults to 0. Set it when the inverter stores its charge and discharg
 Predbat then accepts a rate read-back up to one step *below* the rate it wrote, rather than re-writing it every cycle. A read-back above the rate written still has to be within 5% of the rate ceiling, so this suits an inverter that rounds its rates down.
 
 <!-- markdownlint-enable MD046 -->
+
+### Portable AlphaESS local integration
+
+For the standalone local integration, use `templates/alphaess_local.yaml` rather
+than the household `predbat_alphaess` template above. It reads capacity, power
+limits and the effective export floor from integration entities, and calls
+`alphaess_local` services. See [portable installation and lab inputs](alphaess-v9-release.md#portable-local-alphaess-integration-v938-alphaess6-candidate).

@@ -1,0 +1,13 @@
+aiofiles
+aiohttp>=3.12
+aiomqtt
+matplotlib
+numpy==2.3.5
+prometheus-client
+protobuf
+pycognito
+pyjwt
+pytz
+PyYAML
+requests
+ruamel.yaml

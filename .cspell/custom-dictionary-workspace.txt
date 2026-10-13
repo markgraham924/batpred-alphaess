@@ -296,6 +296,7 @@ heatingactive
 heatingtemp
 heatpump
 heatsink
+Hillview
 holdout
 homeassistant
 houseb
