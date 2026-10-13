@@ -102,7 +102,10 @@ and custom behaviour remain available unchanged.
 
 `fixtures/alphaess-lab-ha.yaml` provides a cumulative 500 W load forecast and
 synthetic PV forecasts shaped like Home Assistant Solcast data. Merge it into the
-lab HA configuration. Copy `fixtures/alphaess-lab-predbat.yaml` keys under the
+lab HA configuration. If using `homeassistant.packages: !include_dir_named packages`,
+copy it to `packages/alphaess_lab_fixtures.yaml`: HA package names require valid
+slugs, so the installed package filename must use underscores rather than hyphens.
+Copy `fixtures/alphaess-lab-predbat.yaml` keys under the
 `pred_bat` section in the lab's copy of the template and remove `template: true`.
 The tariff in the template has 5p overnight import and a 45p evening export
 window. These prices are fictional test data, not an electricity offer.

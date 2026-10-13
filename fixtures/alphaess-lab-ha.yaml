@@ -1,5 +1,7 @@
 # LAB ONLY: deterministic forecasts without accounts or external requests.
 # Merge under Home Assistant configuration.yaml or packages.
+# For include_dir_named packages, copy as alphaess_lab_fixtures.yaml:
+# package names must be valid slugs with underscores, not hyphens.
 template:
   - sensor:
       - name: AlphaESS Lab Load Forecast
