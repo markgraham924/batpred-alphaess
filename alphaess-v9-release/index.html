@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>AlphaESS v9.0.2 release - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "AlphaESS v9.0.2 release";
+        var mkdocs_page_input_path = "alphaess-v9-release.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">AlphaESS v9.0.2 release</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="alphaess-v902-release">AlphaESS v9.0.2 release</h1>
+<p>This release merges upstream commit <code>bc853a0e</code> into the custom AlphaESS fork.
+It preserves guarded Home Assistant control, the AlphaESS and towel plan
+columns, published Optimise price boundaries and existing terminal energy value.
+The experimental extended price forecast is not included or enabled.</p>
+<h2 id="regression-baseline">Regression baseline</h2>
+<p>The upstream random scenario baseline changes only for seeds 6 and 17.
+The existing protection against moving force export into a Freeze Export slot
+causes these differences. A Linux A/B replay removing only that guard in memory
+restored all 320 upstream comparisons across all 20 scenarios. The custom
+baseline therefore retains the guard and records its two different outcomes.
+There was no production logic change to make the baseline pass.</p>
+<p>Release checks run on Linux include the quick suite, all code quality hooks and
+the 16 focused Optimise price coverage and horizon tests. Windows-only failures
+in the Predheat timing and plugin startup tests do not reproduce on Linux.</p>
+<h2 id="deployment">Deployment</h2>
+<p>Deploy the immutable custom release tag with its matching file manifest.
+Back up code and configuration first, preserving credentials outside Git.
+Restart only the Predbat app, retaining the controller enable settings.
+Verify a fresh completed plan, controller health, price coverage and EV state.
+Restore the backed-up runtime if startup or control verification fails.</p>
+<h2 id="v902-alphaess3-deployed-source-alignment">v9.0.2-alphaess.3 — deployed source alignment</h2>
+<p>This stable fork release captures the deployed seven-day planning context: E.ON supplies the executable day, followed by six days of Agile Predict context, with available Solcast P50 solar data. The 50% terminal reserve target and slot-aligned execution remain unchanged.</p>
+<p>Release discovery, tagged downloads and startup verification now default to <code>markgraham924/batpred-alphaess</code>. Home Assistant links to the offered fork release, rather than an upstream URL containing a fork-only tag.</p>
+<p>Validation: offline release-card, seven-day coverage, forecast, slot execution and terminal-target regressions pass. The GitNexus Windows runner failed during native dependency installation; direct call-site inspection and scoped diff review were used instead.</p>
+<h2 id="v902-alphaess4-upstream-clock-fixes">v9.0.2-alphaess.4 - upstream clock fixes</h2>
+<p>Includes upstream main through <code>df6c4b9f</code>, with timezone-aware clock handling, the Solcast midnight race fix and upstream inverter fixes. Preserves the AlphaESS control guards, seven-day price context, 50% terminal target, slot scheduling and fork release discovery.</p>
+<p>Published as a new immutable release so existing installations can identify the updated source correctly.</p>
+<h2 id="portable-local-alphaess-integration-v938-alphaess6-candidate">Portable local AlphaESS integration (v9.3.8-alphaess.6 candidate)</h2>
+<p>The portable path uses <code>templates/alphaess_local.yaml</code> with the separately
+installed <a href="https://github.com/markgraham924/alphaess-local">AlphaESS Local v0.1.0-beta.1 prerelease</a>
+Home Assistant integration on HA 2026.10.1 or newer. It replaces the separate
+Hillview Modbus YAML package and household controller scripts for this path.
+The existing <code>AlphaESSController</code> inverter profile already provides the required
+semantic service interface; no planner or existing household controller behaviour
+was changed to add this installation example.</p>
+<h3 id="installation">Installation</h3>
+<ol>
+<li>Install the local integration and configure its inverter connection, model,
+   capacity and power limits. Confirm its reported values match the installation.
+   Keep its control switch off while completing setup.</li>
+<li>Install the tested Predbat fork release from its GitHub repository. Keep
+   Predbat read-only (<code>switch.predbat_set_read_only</code>) during setup.</li>
+<li>Copy <code>templates/alphaess_local.yaml</code> into the Predbat <code>apps.yaml</code>. The default
+   entity names assume the integration's device is named AlphaESS. Copy the
+   actual IDs from Home Assistant if the names were changed or already existed.</li>
+<li>Replace the fictional import/export tariff with your own rates and configure
+   your own PV forecast. Remove <code>template: true</code> only once configured. For a lab,
+   the fixture files below provide synthetic inputs instead.</li>
+<li>Verify a completed plan and correct battery percentage, power-flow signs,
+   capacity and reserve. The template reads capacity, effective export floor and power
+   limits from integration entities. It has no fixed household battery size or
+   power rating. The profile models one reserve floor, so the template uses
+   the controller's effective export floor for both planning reserve settings.
+   That conservatively keeps the export reserve in normal-demand forecasts too.
+   Predbat's user reserve minimum may be set higher; the local integration
+   independently refuses unsafe export targets and never changes the physical
+   native reserve to follow a plan.</li>
+<li>Stop competing inverter controllers. Enable local integration control and
+   perform a short bounded charge/export/stop test. Confirm physical readback.
+   Then remove Predbat read-only and select the intended control mode.</li>
+<li>After an HA restart the integration requires control to be explicitly enabled
+   again. Verify integration health and the new Predbat plan before resuming.</li>
+</ol>
+<h3 id="controller-contract">Controller contract</h3>
+<p><code>charge_start</code> and <code>discharge_start</code> receive <code>power</code> in watts, <code>target_soc</code> in
+percent and a local <code>end_time</code>. Predbat's template substitutions send numeric
+values as strings and time as <code>HH:MM:SS</code>; the integration validates and converts
+those values. The controller owns the Modbus transaction and readback.</p>
+<p><code>discharge_freeze_service</code> maps to <code>mode19_start</code>. Mode 19 prevents PV charging,
+exports surplus PV and can still allow battery discharge to supply household
+load. It is not a zero-power forced-discharge command. <code>charge_stop</code> only stops
+an owned charge; <code>discharge_stop</code> stops an owned export or Mode 19 request.
+Both stop templates use <code>always: true</code>, ensuring repeated cancellations reach the
+controller even when Predbat's previous service payload has not changed. The
+controller must treat repeated inactive stops as no-ops.</p>
+<p>Optional household AlphaESS plan-mode and towel display columns remain disabled
+in the portable template. The household AlphaESS plan column currently uses
+fixed household sensor names and a household soft floor; enabling that column
+would not describe this installation correctly. Existing household configurations
+and custom behaviour remain available unchanged.</p>
+<h3 id="account-free-lab-inputs">Account-free lab inputs</h3>
+<p><code>fixtures/alphaess-lab-ha.yaml</code> provides a cumulative 500 W load forecast and
+synthetic PV forecasts shaped like Home Assistant Solcast data. Merge it into the
+lab HA configuration. If using <code>homeassistant.packages: !include_dir_named packages</code>,
+copy it to <code>packages/alphaess_lab_fixtures.yaml</code>: HA package names require valid
+slugs, so the installed package filename must use underscores rather than hyphens.
+Copy <code>fixtures/alphaess-lab-predbat.yaml</code> keys under the
+<code>pred_bat</code> section in the lab's copy of the template and remove <code>template: true</code>.
+The tariff in the template has 5p overnight import and a 45p evening export
+window. These prices are fictional test data, not an electricity offer.</p>
+<p>First-day energy counters in a fresh integration contain only observed data;
+there is no historic backfill. Use the synthetic load forecast in the lab rather
+than treating those partial counters as a complete household history.</p>
+<p>A meaningful release test must observe the planner choose charging when import
+is cheap and export when export value is high, then trace the services through
+HA to simulator register readback. Direct service calls and these contract tests
+alone do not prove the full planning loop.</p>
+<h3 id="verification-and-licensing">Verification and licensing</h3>
+<p>The candidate passes 40 fork experiment tests, including four portable local
+controller contract tests using the real <code>Inverter</code> implementation. It also
+passes the focused inverter, execute, AlphaESS configuration, export encoding and
+basic rate suites. Tests use different capacity, reserve and unequal charge and
+discharge limits to detect household defaults. The grid sign test uses actual
+inverter readings, aggregate publication and dashboard import/export icons:
+the local integration reports positive import, while Predbat expects positive
+export, so <code>grid_power_invert: true</code> is required. Logs are retained in the lab
+workspace. Simulation does not establish compatibility with untested real
+inverter models or firmware.</p>
+<p>Predbat's original <code>License.md</code> is retained. It permits GitHub public forks and
+contributions but limits use to personal non-commercial use in the UK and limits
+distribution outside its GitHub repository. The separate local integration must
+retain its own licence and Hillview attribution; including it does not relicense
+Predbat. Publish the two repositories separately and link installation guidance.</p>
+<p>To exercise both decisions immediately, run
+<code>python fixtures/generate_alphaess_lab_scenarios.py --output /tmp/alphaess-lab</code>
+in the isolated lab. It generates a cheap-import charge scenario and a high-value
+export scenario covering only the current London half-hour. The charge phase has
+a uniquely cheap -100p import rate; the export phase has a uniquely high 150p
+export rate. Other slots retain 35p import and 0p export, so postponing an action
+cannot obtain the same price. Regenerate before each phase and allow enough time
+before the half-hour boundary for calculation and readback.
+Both configurations retain read-only mode. Copy the selected file into the lab's
+Predbat configuration, add the lab HA connection privately, and restart only the
+lab Predbat process. For execution tests, enable the lab integration control,
+turn <code>switch.predbat_set_read_only</code> off and select <code>Control charge &amp; discharge</code>.
+Keep <code>switch.predbat_set_charge_freeze</code> and <code>switch.predbat_set_export_freeze</code> off
+for these tests. Start with mid-range simulator SoC so both directions have room.
+After switching scenarios, request a fresh calculation with
+<code>switch.predbat_active</code> and confirm a completed plan before judging readback.
+The generator supplies fictional tariffs, never live supplier requests.</p>
+<p>The integration's Predbat service aliases bind dispatch to planner health:
+configure its planner prefix to match this template's <code>prefix</code> (default
+<code>predbat</code>) and its status timeout (default 600 seconds). The status must be fresh
+and error-free, read-only must be off, and the selected mode must allow the
+requested action. Charge requires <code>Control charge</code> or <code>Control charge &amp; discharge</code>;
+export and Mode 19 require <code>Control charge &amp; discharge</code>. The integration stops
+and disarms when those conditions fail; a disconnected inverter instead falls
+back to its bounded device lease. Manual integration actions deliberately use
+separate ownership and are not cancelled by planner health changes.</p>
+<p>When deliberately stopping Predbat, disable integration control or explicitly
+stop its dispatch too rather than waiting for the stale-status timeout. Include
+planner-loss, read-only and Monitor-mode cancellation in end-to-end commissioning
+checks. Simulator success does not certify physical inverter lease enforcement.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
