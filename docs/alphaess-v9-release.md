@@ -141,7 +141,11 @@ Predbat. Publish the two repositories separately and link installation guidance.
 To exercise both decisions immediately, run
 `python fixtures/generate_alphaess_lab_scenarios.py --output /tmp/alphaess-lab`
 in the isolated lab. It generates a cheap-import charge scenario and a high-value
-export scenario covering the current London half-hour and following two hours.
+export scenario covering only the current London half-hour. The charge phase has
+a uniquely cheap -100p import rate; the export phase has a uniquely high 150p
+export rate. Other slots retain 35p import and 0p export, so postponing an action
+cannot obtain the same price. Regenerate before each phase and allow enough time
+before the half-hour boundary for calculation and readback.
 Both configurations retain read-only mode. Copy the selected file into the lab's
 Predbat configuration, add the lab HA connection privately, and restart only the
 lab Predbat process. For execution tests, enable the lab integration control,
@@ -151,3 +155,10 @@ for these tests. Start with mid-range simulator SoC so both directions have room
 After switching scenarios, request a fresh calculation with
 `switch.predbat_active` and confirm a completed plan before judging readback.
 The generator supplies fictional tariffs, never live supplier requests.
+
+When stopping Predbat, disable the integration control switch or explicitly stop
+the controller too. An accepted local dispatch otherwise has its own bounded
+end time, independent of the planner process. A Home Assistant controller that
+renews its device lease must also monitor planner liveness before treating
+planner process loss as an immediate stop condition. Include planner-loss,
+read-only and Monitor-mode cancellation in end-to-end commissioning checks.

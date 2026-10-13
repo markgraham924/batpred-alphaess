@@ -13,7 +13,7 @@ base = yaml.safe_load((root / "templates/alphaess_local.yaml").read_text(encodin
 forecast = yaml.safe_load((root / "fixtures/alphaess-lab-predbat.yaml").read_text(encoding="utf-8-sig"))
 now = datetime.now(timezone("Europe/London"))
 start = now.replace(minute=now.minute // 30 * 30, second=0, microsecond=0)
-end = start + timedelta(hours=2)
+end = start + timedelta(minutes=30)
 args.output.mkdir(parents=True, exist_ok=True)
 for scenario in ("charge", "export"):
     config = yaml.safe_load(yaml.safe_dump(base))
@@ -24,7 +24,7 @@ for scenario in ("charge", "export"):
     app["rates_import"] = [{"start": "00:00:00", "end": "00:00:00", "rate": 35}]
     app["rates_export"] = [{"start": "00:00:00", "end": "00:00:00", "rate": 0}]
     if scenario == "charge":
-        app["rates_import_override"] = [{"start": start.strftime("%H:%M:%S"), "end": end.strftime("%H:%M:%S"), "rate": -10}]
+        app["rates_import_override"] = [{"start": start.strftime("%H:%M:%S"), "end": end.strftime("%H:%M:%S"), "rate": -100}]
     else:
         app["rates_export_override"] = [{"start": start.strftime("%H:%M:%S"), "end": end.strftime("%H:%M:%S"), "rate": 150}]
     with (args.output / f"{scenario}-apps.yaml").open("w", encoding="utf-8") as handle:
