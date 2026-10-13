@@ -43,7 +43,8 @@ Published as a new immutable release so existing installations can identify the 
 ## Portable local AlphaESS integration (v9.3.8-alphaess.6 candidate)
 
 The portable path uses `templates/alphaess_local.yaml` with the separately
-installed `alphaess_local` Home Assistant integration. It replaces the separate
+installed [AlphaESS Local v0.1.0-beta.1 prerelease](https://github.com/markgraham924/alphaess-local)
+Home Assistant integration on HA 2026.10.1 or newer. It replaces the separate
 Hillview Modbus YAML package and household controller scripts for this path.
 The existing `AlphaESSController` inverter profile already provides the required
 semantic service interface; no planner or existing household controller behaviour
@@ -156,9 +157,17 @@ After switching scenarios, request a fresh calculation with
 `switch.predbat_active` and confirm a completed plan before judging readback.
 The generator supplies fictional tariffs, never live supplier requests.
 
-When stopping Predbat, disable the integration control switch or explicitly stop
-the controller too. An accepted local dispatch otherwise has its own bounded
-end time, independent of the planner process. A Home Assistant controller that
-renews its device lease must also monitor planner liveness before treating
-planner process loss as an immediate stop condition. Include planner-loss,
-read-only and Monitor-mode cancellation in end-to-end commissioning checks.
+The integration's Predbat service aliases bind dispatch to planner health:
+configure its planner prefix to match this template's `prefix` (default
+`predbat`) and its status timeout (default 600 seconds). The status must be fresh
+and error-free, read-only must be off, and the selected mode must allow the
+requested action. Charge requires `Control charge` or `Control charge & discharge`;
+export and Mode 19 require `Control charge & discharge`. The integration stops
+and disarms when those conditions fail; a disconnected inverter instead falls
+back to its bounded device lease. Manual integration actions deliberately use
+separate ownership and are not cancelled by planner health changes.
+
+When deliberately stopping Predbat, disable integration control or explicitly
+stop its dispatch too rather than waiting for the stale-status timeout. Include
+planner-loss, read-only and Monitor-mode cancellation in end-to-end commissioning
+checks. Simulator success does not certify physical inverter lease enforcement.
